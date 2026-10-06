@@ -224,7 +224,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 4 · motor mGBA</p>
+    <p class="note">Versión 5 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -471,7 +471,7 @@ async function start(name, romBytes){
   } catch(e){ fatal("El juego no arrancó.", String(e && e.message || e)); return; }
   running = true;
   try { fn.keyboard(0); } catch(e){}
-  try { fn.ffRatio(ffRate); } catch(e){}
+  try { fn.ffRatio(ffRate || 0); } catch(e){}
   setTimeout(applyVolume, 300);
   // if RetroArch picked a different save path, move our save there
   try {
@@ -555,15 +555,28 @@ function offerResume(st){
 }
 
 /* ---------- menu actions ---------- */
-const FF_RATES = [2, 3, 4, 6, 8];
+const FF_RATES = [2, 3, 4, 6, 8, 0];          // 0 = no limit ("Máx")
+const rateLabel = (r) => r ? "×" + r : "Máx";
 let ffRate = 4;
 try { const v = parseInt(localStorage.getItem("ra-ff")); if (FF_RATES.includes(v)) ffRate = v; } catch(e){}
+/* The engine's own speed limiter overshoots or undershoots on some phones (asking x3 can give x2.1).
+   So the page measures the real speed once fast mode has settled and nudges the value it hands the engine
+   until the real speed matches what was asked. "tuned" remembers the right value per speed. */
+const tuned = {};
+let ffInternal = ffRate, lastTune = 0, lastMeas = 0, cpuLimited = false;
+function sendRatio(v, restart){
+  ffInternal = v;
+  if (!fn) return;
+  try { if (restart) fn.ff(0); fn.ffRatio(v); } catch(e){}
+  if (restart) setTimeout(() => { try { if (ff) fn.ff(1); } catch(e){} }, 40);
+  lastTune = performance.now();
+}
 function paintFF(){
-  $("ffBtn").textContent = "×" + ffRate;
+  $("ffBtn").textContent = rateLabel(ffRate);
   const box = $("ffOpts"); box.textContent = "";
   FF_RATES.forEach(r => {
     const b = document.createElement("button"); b.className = "btn small"; b.type = "button";
-    b.textContent = "×" + r; b.setAttribute("aria-pressed", r === ffRate ? "true" : "false");
+    b.textContent = rateLabel(r); b.setAttribute("aria-pressed", r === ffRate ? "true" : "false");
     if (r === ffRate){ b.style.borderColor = "var(--accent)"; b.style.color = "var(--accent)"; }
     b.onclick = () => { setRate(r); };
     box.append(b);
@@ -571,13 +584,42 @@ function paintFF(){
 }
 function setRate(r){
   ffRate = r; try { localStorage.setItem("ra-ff", String(r)); } catch(e){}
-  if (fn){
-    try { if (ff) fn.ff(0); fn.ffRatio(r); } catch(e){}
-    if (ff) setTimeout(() => { try { if (ff) fn.ff(1); } catch(e){} }, 60);
-  }
+  cpuLimited = false; lastMeas = 0; settled[r] = false; tries[r] = [];
+  sendRatio(tuned[r] || r, ff);
   paintFF();
 }
-function setFF(on){ ff = on; try { fn.ff(on ? 1 : 0); } catch(e){} $("ffBtn").setAttribute("aria-pressed", on ? "true" : "false"); }
+function setFF(on){
+  ff = on;
+  if (on){ sendRatio(tuned[ffRate] || ffRate, false); }
+  try { fn.ff(on ? 1 : 0); } catch(e){}
+  lastTune = performance.now();
+  $("ffBtn").setAttribute("aria-pressed", on ? "true" : "false");
+}
+const tries = {}, settled = {};
+function tuneFF(){
+  // called once per speed reading; needs 2.2 s of clean fast mode since the last change
+  if (!ff || !ffRate || settled[ffRate] || performance.now() - lastTune < 2200) return;
+  const meas = fps / 60, want = ffRate;
+  const dir = meas < want * 0.92 ? 1 : (meas > want * 1.08 ? -1 : 0);
+  const list = (tries[want] = tries[want] || []);
+  const prev = list[list.length - 1];
+  list.push({v: ffInternal, m: meas, dir});
+  if (dir === 0){ settled[want] = true; tuned[want] = ffInternal; return; }
+  if (dir === 1 && prev && prev.dir === 1 && ffInternal > prev.v && meas <= prev.m * 1.03){
+    // asking for more didn't make it faster: the phone is at its limit
+    cpuLimited = true; settled[want] = true; tuned[want] = want; sendRatio(want, true); return;
+  }
+  if ((prev && prev.dir === -dir) || list.length >= 6){
+    // the engine only has coarse speed steps here: keep the closest one we have seen and stop adjusting
+    const best = list.slice().sort((a, b) => Math.abs(a.m - want) - Math.abs(b.m - want) || b.m - a.m)[0];
+    settled[want] = true; tuned[want] = best.v;
+    if (Math.abs(best.v - ffInternal) > 0.01) sendRatio(best.v, true);
+    return;
+  }
+  const next = dir === 1 ? Math.min(want * 2.5, ffInternal * want / Math.max(meas, 0.5))
+                         : Math.max(want * 0.5, ffInternal * want / meas);
+  if (Math.abs(next - ffInternal) >= 0.2) sendRatio(next, true); else settled[want] = true;
+}
 paintFF();
 $("ffBtn").onclick = () => running && setFF(!ff);
 $("saveStateBtn").onclick = async () => {
@@ -623,7 +665,9 @@ $("menuBtn").onclick = async () => {
   if (!running) return;
   $("menu").showModal(); $("menuMsg").textContent = ""; paintFs();
   $("fpsNote").textContent = ff
-    ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (fps / 60 < ffRate * 0.85 ? " · tu equipo no alcanza esa velocidad" : "")
+    ? (ffRate
+        ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (cpuLimited || (settled[ffRate] && fps / 60 < ffRate * 0.85) ? " · tu equipo no da más que eso ahora" : (!settled[ffRate] && fps / 60 < ffRate * 0.93 ? " · ajustando…" : ""))
+        : "Velocidad real: ×" + (fps / 60).toFixed(1) + " (lo máximo que da tu equipo)")
     : "Velocidad del juego: " + fps + " cuadros/s" + (fps >= 57 ? " · normal" : " · más lento de lo normal (lo normal es 60)");
   $("fpsNote").textContent += " · Tirones en el último minuto: " + jankCount() + " · Pausa por respaldo: " + Math.round(backupMs) + " ms";
   await flushSave(); await renderHistory();
@@ -740,7 +784,7 @@ setInterval(() => {
     sent[b] = v; changedAt[b] = f;
   }
   const now = performance.now();
-  if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; }
+  if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; tuneFF(); }
 }, 8);
 const padEl = $("pad");
 padEl.addEventListener("pointerdown", (e) => {
