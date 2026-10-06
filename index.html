@@ -43,7 +43,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #play{position:fixed;inset:0;background:#000;z-index:5;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overflow:hidden
   ;--u:min(1vw,1vh);--s:clamp(60px, 15*var(--u), 92px);--gap:max(10px, env(safe-area-inset-left, 0px));--top:max(8px, env(safe-area-inset-top, 0px));--bot:max(12px, env(safe-area-inset-bottom, 0px))}
 .screen{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw, 150vh);width:min(100vw, 150dvh);aspect-ratio:3/2;max-width:100%;background:#000;overflow:hidden}
-.screen canvas{position:absolute;inset:0;width:100%!important;height:100%!important;image-rendering:pixelated;display:block}
+/* The engine sizes its drawing buffer from the canvas' CSS box, in CSS pixels. Making the box --dpr times
+   larger and shrinking it back with a transform gives a buffer with one pixel per screen pixel, so the
+   game is scaled once, sharply, instead of being scaled twice and smeared. */
+.screen canvas{position:absolute;left:0;top:0;width:calc(100% * var(--dpr, 1))!important;height:calc(100% * var(--dpr, 1))!important;transform:scale(calc(1 / var(--dpr, 1)));transform-origin:0 0;image-rendering:pixelated;display:block}
 .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;text-align:center;background:#000;color:var(--mute);font-size:14px;touch-action:auto}
 .overlay strong{color:var(--ink);font-weight:600}
 .toast{position:absolute;left:50%;top:12%;transform:translateX(-50%);background:rgba(10,9,14,.85);border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:6px 12px;font-size:13px;white-space:nowrap;pointer-events:none;transition:opacity .25s;z-index:2}
@@ -429,7 +432,7 @@ async function start(name, romBytes){
   try {
     Module = await window.EJS_Runtime({
       noInitialRun: true, canvas: $("canvas"), parent: $("screen"), arguments: [], preRun: [], postRun: [],
-      callbacks: { setupCoreSettingFile: (p) => { try { writeFile(p, 'mgba_skip_bios = "ON"\nmgba_frameskip = "0"\n'); } catch(e){} } },
+      callbacks: { setupCoreSettingFile: (p) => { try { writeFile(p, 'mgba_skip_bios = "ON"\nmgba_frameskip = "0"\nmgba_interframe_blending = "OFF"\n'); } catch(e){} } },
       print: () => {}, printErr: () => {},
       locateFile: (f) => f.endsWith(".wasm") ? "mgba_libretro.wasm" : f,
       getSavExt: () => ".srm"
@@ -760,6 +763,10 @@ function unlockAudio(){
 }
 document.addEventListener("pointerdown", unlockAudio, {passive:true});
 
+function setDpr(){ document.documentElement.style.setProperty("--dpr", String(window.devicePixelRatio || 1)); }
+setDpr();
+window.addEventListener("resize", setDpr);
+try { matchMedia("(resolution: " + (window.devicePixelRatio || 1) + "dppx)").addEventListener("change", setDpr); } catch(e){}
 renderLibrary();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
