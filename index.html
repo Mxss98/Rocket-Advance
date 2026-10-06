@@ -222,6 +222,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
+    <p class="note">Versión 3 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -768,7 +769,13 @@ setDpr();
 window.addEventListener("resize", setDpr);
 try { matchMedia("(resolution: " + (window.devicePixelRatio || 1) + "dppx)").addEventListener("change", setDpr); } catch(e){}
 renderLibrary();
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator){
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  // when a new version takes over, reload once so it applies right away (not while a game is running)
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !reloaded && !running){ reloaded = true; location.reload(); } });
+  navigator.serviceWorker.register("sw.js", {updateViaCache: "none"}).then((r) => r.update()).catch(() => {});
+}
 })();
 </script>
 
