@@ -224,7 +224,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 5 · motor mGBA</p>
+    <p class="note">Versión 6 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -452,7 +452,8 @@ async function start(name, romBytes){
     savePath: w("save_file_path","string",[]), flush: w("cmd_savefiles","",[]), reloadSave: w("refresh_save_files","null",[]),
     ff: w("toggle_fastforward","null",["number"]), ffRatio: w("set_ff_ratio","null",["number"]),
     keyboard: w("ejs_set_keyboard_enabled","null",["number"]),
-    frames: w("get_current_frame_count","number",[])
+    frames: w("get_current_frame_count","number",[]),
+    shader: w("shader_enable","null",["number"])
   };
   writeFile("/home/web_user/.config/retroarch/retroarch.cfg", RA_CFG);
   const romPath = "/roms/" + game.base + "." + game.ext;
@@ -472,6 +473,7 @@ async function start(name, romBytes){
   running = true;
   try { fn.keyboard(0); } catch(e){}
   try { fn.ffRatio(ffRate || 0); } catch(e){}
+  applyShader();
   setTimeout(applyVolume, 300);
   // if RetroArch picked a different save path, move our save there
   try {
@@ -814,25 +816,71 @@ function unlockAudio(){
 }
 document.addEventListener("pointerdown", unlockAudio, {passive:true});
 
-// "smooth" draws the game at its real 240x160 and lets the browser smooth it up (the My Boy look);
-// "medium" draws it at 2x first (softer edges, less blur); "pixel" draws one pixel per screen pixel.
-const IMG_MODES = {smooth: {k: 1, label: "Imagen: suave"}, medium: {k: 2, label: "Imagen: media"}, pixel: {k: 0, label: "Imagen: píxeles"}};
-const IMG_ORDER = ["smooth", "medium", "pixel"];
+/* Image modes are done by the engine's own GPU shader, so they look the same on every phone no matter how
+   the browser scales the canvas. "smooth": bilinear from 240x160 (the My Boy look). "pixel": no filter.
+   (Multi-pass presets need offscreen buffers this web build can't create, so there is no in-between mode.) */
+const STOCK_GLSL = `#if defined(VERTEX)
+#if __VERSION__ >= 130
+#define COMPAT_VARYING out
+#define COMPAT_ATTRIBUTE in
+#else
+#define COMPAT_VARYING varying
+#define COMPAT_ATTRIBUTE attribute
+#endif
+COMPAT_ATTRIBUTE vec4 VertexCoord;
+COMPAT_ATTRIBUTE vec4 TexCoord;
+COMPAT_VARYING vec4 TEX0;
+uniform mat4 MVPMatrix;
+void main() { gl_Position = MVPMatrix * VertexCoord; TEX0.xy = TexCoord.xy; }
+#elif defined(FRAGMENT)
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+#endif
+#if __VERSION__ >= 130
+#define COMPAT_VARYING in
+#define COMPAT_TEXTURE texture
+out vec4 FragColor;
+#else
+#define COMPAT_VARYING varying
+#define FragColor gl_FragColor
+#define COMPAT_TEXTURE texture2D
+#endif
+uniform sampler2D Texture;
+COMPAT_VARYING vec4 TEX0;
+void main() { FragColor = COMPAT_TEXTURE(Texture, TEX0.xy); }
+#endif
+`;
+const IMG_MODES = {
+  smooth: {label: "Imagen: suave", preset: 'shaders = 1\nshader0 = "stock.glsl"\nfilter_linear0 = true\n'},
+  pixel:  {label: "Imagen: píxeles", preset: null}
+};
+const IMG_ORDER = ["smooth", "pixel"];
 let imgMode = "smooth";
 try { const v = localStorage.getItem("ra-img2"); if (IMG_MODES[v]) imgMode = v; } catch(e){}
+function applyShader(){
+  if (!fn || !FS) return;
+  try { FS.unlink("/shader/shader.glslp"); } catch(e){}
+  const preset = IMG_MODES[imgMode].preset;
+  try {
+    if (!preset){ fn.shader(0); return; }
+    mkdirp("/shader");
+    FS.writeFile("/shader/stock.glsl", STOCK_GLSL);
+    FS.writeFile("/shader/shader.glslp", preset);
+    fn.shader(1);
+  } catch(e){ console.warn(e); }
+}
 function applyScale(){
-  const sc = $("screen");
-  const w = sc.getBoundingClientRect().width || window.innerWidth;
-  const k = IMG_MODES[imgMode].k;
-  const f = k ? Math.max(0.1, (240 * k) / w) : (window.devicePixelRatio || 1);
-  document.documentElement.style.setProperty("--rs", f.toFixed(5));
-  sc.classList.toggle("smooth", k > 0);
+  // one drawing-buffer pixel per screen pixel; the shader does any smoothing
+  document.documentElement.style.setProperty("--rs", String(window.devicePixelRatio || 1));
   $("imgBtn").textContent = IMG_MODES[imgMode].label;
 }
-$("imgBtn").onclick = () => { imgMode = IMG_ORDER[(IMG_ORDER.indexOf(imgMode) + 1) % IMG_ORDER.length]; try { localStorage.setItem("ra-img2", imgMode); } catch(e){} applyScale(); };
+$("imgBtn").onclick = () => { imgMode = IMG_ORDER[(IMG_ORDER.indexOf(imgMode) + 1) % IMG_ORDER.length]; try { localStorage.setItem("ra-img2", imgMode); } catch(e){} applyScale(); applyShader(); };
 applyScale();
 window.addEventListener("resize", applyScale);
-try { new ResizeObserver(applyScale).observe($("screen")); } catch(e){}
 
 /* stutter diagnostics: screen refreshes that took longer than 50 ms, and how long backups block the game */
 const janks = []; let lastRaf = 0, backupMs = 0;
