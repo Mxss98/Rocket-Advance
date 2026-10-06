@@ -73,6 +73,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .fb{border-radius:50%;width:var(--f);height:var(--f);--f:clamp(58px, 15*var(--u), 92px);font-size:calc(var(--f) * .42)}
 .fb.a{right:var(--gap);bottom:calc(var(--bot) + var(--f) * .55)}
 .fb.b{right:calc(var(--gap) + var(--f) * 1.15);bottom:var(--bot)}
+/* turbo switch sits just above A; while on, holding A taps it ~15 times per game second */
+.turbo{--f:clamp(58px, 15*var(--u), 92px);right:var(--gap);bottom:calc(var(--bot) + var(--f) * 1.55 + 10px);width:var(--f);height:calc(var(--f) * .36);border-radius:999px;font-size:calc(var(--f) * .15);font-weight:600;letter-spacing:.06em}
 .pill{bottom:calc(var(--bot) + 4px);width:clamp(50px, 11*var(--u), 72px);height:clamp(22px, 4.6*var(--u), 30px);border-radius:999px;font-size:9px;letter-spacing:.08em;color:rgba(255,255,255,.7)}
 .pill.sel{left:calc(50% - clamp(50px, 11*var(--u), 72px) - 10px)}
 .pill.start{left:calc(50% + 10px)}
@@ -85,6 +87,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .dpad{bottom:calc(var(--bot) + 56px)}
   .fb.a{bottom:calc(var(--bot) + 56px + var(--f) * .55)}
   .fb.b{bottom:calc(var(--bot) + 56px)}
+  .turbo{bottom:calc(var(--bot) + 56px + var(--f) * 1.55 + 10px)}
 }
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
@@ -173,6 +176,7 @@ body.playing header{display:none}
       <div class="ctl pill start" data-btn="START">START</div>
       <div class="ctl fb b" data-btn="B">B</div>
       <div class="ctl fb a" data-btn="A">A</div>
+      <button class="ctl turbo" id="turboBtn" type="button" aria-pressed="false" aria-label="A turbo">TURBO</button>
     </div>
   </section>
 </div>
@@ -224,7 +228,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 7 · motor mGBA</p>
+    <p class="note">Versión 8 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -776,6 +780,11 @@ let fpsLast = {t: performance.now(), f: 0}, fps = 0;
 setInterval(() => {
   if (!running || !fn) return;
   const f = frameNow();
+  if (turbo && pressed.has("A") && !(inq.A && inq.A.length) && f - (changedAt.A || 0) >= 2){
+    const v = sent.A ? 0 : 1;
+    try { fn.input(0, BTN.A, v); } catch(e){}
+    sent.A = v; changedAt.A = f;
+  }
   for (const b in inq){
     const q = inq[b]; if (!q.length) continue;
     if (sent[b] !== undefined && f - changedAt[b] < 2) continue;
@@ -788,6 +797,11 @@ setInterval(() => {
   const now = performance.now();
   if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; tuneFF(); }
 }, 8);
+let turbo = false;
+try { turbo = localStorage.getItem("ra-turbo") === "1"; } catch(e){}
+function paintTurbo(){ $("turboBtn").setAttribute("aria-pressed", turbo ? "true" : "false"); }
+$("turboBtn").addEventListener("click", () => { turbo = !turbo; try { localStorage.setItem("ra-turbo", turbo ? "1" : "0"); } catch(e){} paintTurbo(); toast(turbo ? "Turbo A: mantén A para pasar textos" : "Turbo A apagado"); });
+paintTurbo();
 const padEl = $("pad");
 padEl.addEventListener("pointerdown", (e) => {
   if (!e.target.closest || !e.target.closest("[data-btn]")) return;
