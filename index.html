@@ -64,9 +64,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .menu{top:var(--top);left:50%;transform:translateX(-50%);width:52px;height:42px;border-radius:8px}
 .menu svg{width:26px;height:20px}
 .menu .led{position:absolute;right:-5px;top:-5px}
-.dpad{left:var(--gap);bottom:var(--bot);width:var(--d);height:var(--d);--d:clamp(130px, 40*var(--u), 210px);border:0;background:none}
+.dpad{left:var(--gap);bottom:var(--bot);width:var(--d);height:var(--d);--d:clamp(160px, 50*var(--u), 260px);border:0;background:none}
 .dpad em{position:absolute;width:33%;height:33%;box-sizing:border-box;border:2px solid rgba(255,255,255,.62);border-radius:8px;display:grid;place-items:center;font-style:normal}
-.dpad em svg{width:52%;height:52%;fill:none;stroke:rgba(255,255,255,.85);stroke-width:2.2;stroke-linejoin:round}
+.dpad em svg{width:56%;height:56%;fill:none;stroke:rgba(255,255,255,.85);stroke-width:2.2;stroke-linejoin:round}
 .dpad em[data-d="UP"]{left:33.5%;top:0}.dpad em[data-d="DOWN"]{left:33.5%;bottom:0}.dpad em[data-d="LEFT"]{left:0;top:33.5%}.dpad em[data-d="RIGHT"]{right:0;top:33.5%}
 .dpad em[data-d="UP"] svg{transform:rotate(0)}.dpad em[data-d="RIGHT"] svg{transform:rotate(90deg)}.dpad em[data-d="DOWN"] svg{transform:rotate(180deg)}.dpad em[data-d="LEFT"] svg{transform:rotate(270deg)}
 .dpad em.on{background:rgba(255,255,255,.28);border-color:#fff}
@@ -80,6 +80,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .pill.start{left:calc(50% + 10px)}
 /* portrait: game on top, controls under it */
 @media (orientation:portrait){
+  .dpad{--d:clamp(160px, 53vw, 250px)}
   .screen{top:var(--top);transform:translateX(-50%);width:100vw}
   .sh,.menu{top:calc(var(--top) + 66.667vw + 14px)}
   .ffb{top:calc(var(--top) + 66.667vw + 14px + var(--s) * .04)}
@@ -228,7 +229,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 8 · motor mGBA</p>
+    <p class="note">Versión 9 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -766,7 +767,7 @@ function btnsAt(x, y){
 }
 function sync(){
   const next = new Set(); pointers.forEach(s => s.forEach(b => next.add(b))); keysDown.forEach(b => next.add(b));
-  next.forEach(b => { if (!pressed.has(b)){ pressed.add(b); send(b, 1); if (navigator.vibrate) try { navigator.vibrate(8); } catch(e){} } });
+  next.forEach(b => { if (!pressed.has(b)){ pressed.add(b); send(b, 1); } });
   [...pressed].forEach(b => { if (!next.has(b)){ pressed.delete(b); send(b, 0); } });
   document.querySelectorAll("[data-btn]").forEach(el => { if (el.dataset.btn !== "DPAD") el.classList.toggle("on", pressed.has(el.dataset.btn)); });
   document.querySelectorAll(".dpad em").forEach(el => el.classList.toggle("on", pressed.has(el.dataset.d)));
