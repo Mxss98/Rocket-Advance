@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#15131c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Rocket Advance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Silkscreen&display=swap">
+<style>
+/* Layout: library page, then a full-screen player with see-through controls over the game (My Boy style). Single dark theme on purpose: it is a game screen. */
+:root{
+  --shell:#15131c; --body:#1f1c29; --raise:#2a2637; --line:#3b3650;
+  --ink:#ece9f4; --mute:#9d98b2; --accent:#d9a441; --face:#6a5fd6; --face-ink:#f3f1ff;
+  --ok:#5fcf8f; --warn:#e9a23b; --bad:#ef6a6a;
+  --f-display:"Silkscreen", ui-monospace, "Courier New", monospace;
+  --f-body:"Barlow", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme:dark;
+}
+[hidden]{display:none!important}
+.vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0);pointer-events:none}
+html,body{height:100%}
+body{margin:0;background:var(--shell);color:var(--ink);font-family:var(--f-body);font-size:15px;margin:0;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit}
+#app{min-height:100%;box-sizing:border-box;padding-inline:16px;padding-block:max(10px, env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-bottom, 0px));display:flex;flex-direction:column;gap:12px;max-width:560px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.logo{font-family:var(--f-display);font-size:15px;letter-spacing:.06em;margin:0;white-space:nowrap}
+.logo b{color:var(--accent);font-weight:400}
+.status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mute);min-width:0;text-align:right}
+.status span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.led{width:9px;height:9px;border-radius:50%;background:var(--line);flex:none;box-shadow:0 0 0 2px var(--body)}
+.led.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.led.busy{background:var(--warn)}
+.led.bad{background:var(--bad)}
+
+/* player: the game fills the screen, controls float on top (My Boy style) */
+#play{position:fixed;inset:0;background:#000;z-index:5;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overflow:hidden
+  ;--u:min(1vw,1vh);--s:clamp(60px, 15*var(--u), 92px);--gap:max(10px, env(safe-area-inset-left, 0px));--top:max(8px, env(safe-area-inset-top, 0px));--bot:max(12px, env(safe-area-inset-bottom, 0px))}
+.screen{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw, 150vh);width:min(100vw, 150dvh);aspect-ratio:3/2;max-width:100%;background:#000;overflow:hidden}
+.screen canvas{position:absolute;inset:0;width:100%!important;height:100%!important;image-rendering:pixelated;display:block}
+.overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;text-align:center;background:#000;color:var(--mute);font-size:14px;touch-action:auto}
+.overlay strong{color:var(--ink);font-weight:600}
+.toast{position:absolute;left:50%;top:12%;transform:translateX(-50%);background:rgba(10,9,14,.85);border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:6px 12px;font-size:13px;white-space:nowrap;pointer-events:none;transition:opacity .25s;z-index:2}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+
+/* overlay controls: outlined, see-through */
+.ctl{position:absolute;z-index:3;box-sizing:border-box;border:2px solid rgba(255,255,255,.62);background:rgba(255,255,255,.04);color:rgba(255,255,255,.85);display:grid;place-items:center;font-family:var(--f-body);font-weight:500;padding:0;cursor:pointer}
+.ctl.on,.ctl[aria-pressed="true"]{background:rgba(255,255,255,.28);border-color:#fff;color:#fff}
+.ctl:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.sh{top:var(--top);width:calc(var(--s) * 1.15);height:calc(var(--s) * .5);font-size:calc(var(--s) * .28)}
+.sh.l{left:var(--gap);border-radius:12px 34px 34px 12px / 12px 26px 26px 12px}
+.sh.r{right:var(--gap);border-radius:34px 12px 12px 34px / 26px 12px 12px 26px}
+.ffb{top:calc(var(--top) + var(--s) * .04);right:calc(var(--gap) + var(--s) * 1.15 + 10px);width:calc(var(--s) * .7);height:calc(var(--s) * .42);border-radius:10px;font-size:calc(var(--s) * .2);font-weight:600}
+.menu{top:var(--top);left:50%;transform:translateX(-50%);width:52px;height:42px;border-radius:8px}
+.menu svg{width:26px;height:20px}
+.menu .led{position:absolute;right:-5px;top:-5px}
+.dpad{left:var(--gap);bottom:var(--bot);width:var(--d);height:var(--d);--d:clamp(130px, 40*var(--u), 210px);border:0;background:none}
+.dpad em{position:absolute;width:33%;height:33%;box-sizing:border-box;border:2px solid rgba(255,255,255,.62);border-radius:8px;display:grid;place-items:center;font-style:normal}
+.dpad em svg{width:52%;height:52%;fill:none;stroke:rgba(255,255,255,.85);stroke-width:2.2;stroke-linejoin:round}
+.dpad em[data-d="UP"]{left:33.5%;top:0}.dpad em[data-d="DOWN"]{left:33.5%;bottom:0}.dpad em[data-d="LEFT"]{left:0;top:33.5%}.dpad em[data-d="RIGHT"]{right:0;top:33.5%}
+.dpad em[data-d="UP"] svg{transform:rotate(0)}.dpad em[data-d="RIGHT"] svg{transform:rotate(90deg)}.dpad em[data-d="DOWN"] svg{transform:rotate(180deg)}.dpad em[data-d="LEFT"] svg{transform:rotate(270deg)}
+.dpad em.on{background:rgba(255,255,255,.28);border-color:#fff}
+.fb{border-radius:50%;width:var(--f);height:var(--f);--f:clamp(58px, 15*var(--u), 92px);font-size:calc(var(--f) * .42)}
+.fb.a{right:var(--gap);bottom:calc(var(--bot) + var(--f) * .55)}
+.fb.b{right:calc(var(--gap) + var(--f) * 1.15);bottom:var(--bot)}
+.pill{bottom:calc(var(--bot) + 4px);width:clamp(50px, 11*var(--u), 72px);height:clamp(22px, 4.6*var(--u), 30px);border-radius:999px;font-size:9px;letter-spacing:.08em;color:rgba(255,255,255,.7)}
+.pill.sel{left:calc(50% - clamp(50px, 11*var(--u), 72px) - 10px)}
+.pill.start{left:calc(50% + 10px)}
+/* portrait: game on top, controls under it */
+@media (orientation:portrait){
+  .screen{top:var(--top);transform:translateX(-50%);width:100vw}
+  .sh,.menu{top:calc(var(--top) + 66.667vw + 14px)}
+  .ffb{top:calc(var(--top) + 66.667vw + 14px + var(--s) * .04)}
+  #play{--u:1.15vw}
+  .dpad{bottom:calc(var(--bot) + 56px)}
+  .fb.a{bottom:calc(var(--bot) + 56px + var(--f) * .55)}
+  .fb.b{bottom:calc(var(--bot) + 56px)}
+}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* library */
+#lib{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--body);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h2{font-size:16px;margin:0 0 4px;font-weight:600}
+.card p{margin:0;color:var(--mute);line-height:1.45;font-size:14px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:10px;padding:11px 16px;border:1px solid var(--line);background:var(--raise);font-weight:600;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#1a1405}
+.btn.danger{color:var(--bad)}
+.btn.small{padding:7px 11px;font-size:13px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.games{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.game{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}
+.game:first-child{border-top:0}
+.game .meta{min-width:0}
+.game .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.game .sub{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums}
+.keys{font-size:13px;color:var(--mute);line-height:1.6}
+kbd{font-family:var(--f-display);font-size:10px;border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--ink)}
+
+/* menu sheet */
+dialog{background:var(--body);color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:0;width:min(440px,calc(100vw - 32px));max-height:calc(100% - 40px)}
+dialog::backdrop{background:rgba(5,4,10,.6)}
+.sheet{padding:16px;display:flex;flex-direction:column;gap:14px}
+.sheet h3{margin:0;font-size:16px;font-weight:600}
+.sheet .grp{display:flex;flex-direction:column;gap:8px}
+.sheet .lbl{font-family:var(--f-display);font-size:10px;letter-spacing:.08em;color:var(--mute)}
+.hist{display:flex;flex-direction:column;gap:0;max-height:220px;overflow:auto}
+.hist .game{padding:8px 0}
+.note{font-size:13px;color:var(--mute);line-height:1.45;margin:0}
+.msg{font-size:13px;margin:0;min-height:1em}
+.msg.bad{color:var(--bad)}.msg.ok{color:var(--ok)}
+
+.menu-status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mute)}
+body.playing{overflow:hidden}
+body.playing header{display:none}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <h1 class="logo">ROCKET <b>ADVANCE</b></h1>
+      </header>
+
+  <!-- Library -->
+  <section id="lib">
+    <div class="card">
+      <h2>Carga tu juego</h2>
+      <p>Elige tu ROM de Game Boy Advance (.gba o un .zip que la contenga). Se queda guardada en este navegador para que la próxima vez solo toques "Jugar". No se sube a ningún lado.</p>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="romBtn" type="button">Elegir ROM</button>
+        <input id="romInput" class="vh" type="file" tabindex="-1" aria-hidden="true">
+      </div>
+      <p class="note" style="margin-top:10px">En el computador también puedes arrastrar la ROM a esta ventana.</p>
+      <p class="msg" id="libMsg"></p>
+    </div>
+    <div class="card" id="gamesCard" hidden>
+      <h2>Tus juegos</h2>
+      <div class="games" id="games"></div>
+    </div>
+    <div class="card">
+      <h2>Cómo se guarda tu partida</h2>
+      <p>Cada vez que guardas dentro del juego, la página copia la partida a este navegador en segundos y guarda versiones anteriores, así un error no te borra el avance. Además toma un estado automático cada minuto. Desde el menú ☰ puedes exportar la partida como .sav o importar tu .sav de My Boy o Pizza Boy.</p>
+    </div>
+  </section>
+
+  <!-- Player -->
+  <section id="play" hidden>
+    <div class="screen" id="screen">
+      <canvas id="canvas" tabindex="-1"></canvas>
+      <div class="overlay" id="overlay"><strong id="ovTitle">Cargando motor…</strong><span id="ovSub">mGBA</span></div>
+      <div class="toast" id="toast" style="opacity:0"></div>
+    </div>
+    <div id="pad" aria-label="Controles">
+      <div class="ctl sh l" data-btn="L">L</div>
+      <button class="ctl ffb" id="ffBtn" type="button" aria-pressed="false" aria-label="Velocidad rápida">×4</button>
+      <button class="ctl menu" id="menuBtn" type="button" aria-label="Menú"><svg viewBox="0 0 26 20" aria-hidden="true"><path d="M2 3h22M2 10h22M2 17h22" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg><i class="led" id="led"></i></button>
+      <div class="ctl sh r" data-btn="R">R</div>
+      <div class="ctl dpad" data-btn="DPAD" aria-label="Cruceta">
+        <em data-d="UP"><svg viewBox="0 0 24 24"><path d="M12 4 L21 15 H16 V20 H8 V15 H3 Z"/></svg></em><em data-d="DOWN"><svg viewBox="0 0 24 24"><path d="M12 4 L21 15 H16 V20 H8 V15 H3 Z"/></svg></em><em data-d="LEFT"><svg viewBox="0 0 24 24"><path d="M12 4 L21 15 H16 V20 H8 V15 H3 Z"/></svg></em><em data-d="RIGHT"><svg viewBox="0 0 24 24"><path d="M12 4 L21 15 H16 V20 H8 V15 H3 Z"/></svg></em>
+      </div>
+      <div class="ctl pill sel" data-btn="SELECT">SELECT</div>
+      <div class="ctl pill start" data-btn="START">START</div>
+      <div class="ctl fb b" data-btn="B">B</div>
+      <div class="ctl fb a" data-btn="A">A</div>
+    </div>
+  </section>
+</div>
+
+<dialog id="menu">
+  <div class="sheet">
+    <div class="row" style="justify-content:space-between"><h3 id="gameName">Menú</h3><button class="btn small" id="closeMenu">Volver al juego</button></div>
+    <div class="menu-status"><i class="led" id="led2"></i><span id="statusText">Sin juego cargado</span></div>
+    <div class="grp">
+      <span class="lbl">ESTADO RÁPIDO</span>
+      <div class="row">
+        <button class="btn small" id="saveStateBtn">Guardar estado</button>
+        <button class="btn small" id="loadStateBtn">Cargar estado</button>
+      </div>
+      <p class="note" id="fpsNote"></p>
+      <p class="note" id="stateNote">Guarda el momento exacto, aunque no hayas guardado dentro del juego.</p>
+    </div>
+    <div class="grp">
+      <span class="lbl">VELOCIDAD RÁPIDA (BOTÓN ×)</span>
+      <div class="row" id="ffOpts"></div>
+    </div>
+    <div class="grp">
+      <span class="lbl">SONIDO Y PANTALLA</span>
+      <div class="row">
+        <button class="btn small" id="soundBtn" aria-pressed="true">Sonido: sí</button>
+        <button class="btn small" id="fsBtn">Pantalla completa</button>
+      </div>
+    </div>
+    <div class="grp">
+      <span class="lbl">PARTIDA</span>
+      <div class="row">
+        <button class="btn small" id="exportBtn">Exportar partida (.sav)</button>
+        <button class="btn small" id="saveBtn" type="button">Importar .sav</button>
+        <input id="saveInput" class="vh" type="file" tabindex="-1" aria-hidden="true">
+      </div>
+      <p class="note">Importar reemplaza la partida actual y reinicia el juego. Antes de reemplazar, la partida actual queda en "Versiones anteriores".</p>
+      <p class="msg" id="menuMsg"></p>
+    </div>
+    <div class="grp">
+      <span class="lbl">VERSIONES ANTERIORES</span>
+      <div class="hist" id="hist"></div>
+    </div>
+    <div class="grp">
+      <span class="lbl">TECLADO</span>
+      <p class="keys"><kbd>Flechas</kbd> cruceta · <kbd>X</kbd> A · <kbd>Z</kbd> B · <kbd>Enter</kbd> Start · <kbd>Shift</kbd> Select · <kbd>A</kbd> L · <kbd>S</kbd> R · <kbd>Espacio</kbd> rápido</p>
+    </div>
+    <div class="row">
+      <button class="btn small" id="restartBtn">Reiniciar juego</button>
+      <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="mgba_libretro.js"></script>
+<script>
+(() => {
+"use strict";
+const $ = (id) => document.getElementById(id);
+const BTN = {B:0,SELECT:2,START:3,UP:4,DOWN:5,LEFT:6,RIGHT:7,A:8,L:10,R:11};
+const HISTORY_KEEP = 12, HISTORY_GAP_MS = 4*60*1000, FLUSH_MS = 3000, AUTOSTATE_MS = 60*1000;
+
+/* ---------- IndexedDB ---------- */
+let dbp = null;
+function db(){
+  if (dbp) return dbp;
+  dbp = new Promise((res, rej) => {
+    let r;
+    try { r = indexedDB.open("rocket-advance", 1); } catch (e) { rej(e); return; }
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore("roms");        // name -> ArrayBuffer
+      d.createObjectStore("meta");        // name -> {name,size,added,played}
+      d.createObjectStore("saves");       // name -> {data,ts}
+      d.createObjectStore("states");      // name|slot -> {data,ts}
+      const h = d.createObjectStore("history", {autoIncrement:true});
+      h.createIndex("name","name");
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  return dbp;
+}
+async function tx(store, mode, fn){
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction(store, mode);
+    const s = t.objectStore(store);
+    let out;
+    Promise.resolve(fn(s)).then(v => out = v);
+    t.oncomplete = () => res(out);
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const idbGet = (store, key) => tx(store, "readonly", s => req(s.get(key)));
+const idbPut = (store, key, val) => tx(store, "readwrite", s => { s.put(val, key); });
+const idbDel = (store, key) => tx(store, "readwrite", s => { s.delete(key); });
+const idbAll = (store) => tx(store, "readonly", s => req(s.getAll()));
+async function histList(name){
+  return tx("history","readonly", s => new Promise((res, rej) => {
+    const out = []; const c = s.index("name").openCursor(IDBKeyRange.only(name));
+    c.onsuccess = () => { const cur = c.result; if (cur){ out.push({key:cur.primaryKey, ...cur.value}); cur.continue(); } else res(out); };
+    c.onerror = () => rej(c.error);
+  }));
+}
+async function histAdd(name, data){
+  await tx("history","readwrite", s => { s.add({name, data, ts:Date.now()}); });
+  const list = await histList(name);
+  list.sort((a,b) => b.ts - a.ts);
+  const drop = list.slice(HISTORY_KEEP);
+  if (drop.length) await tx("history","readwrite", s => { drop.forEach(x => s.delete(x.key)); });
+}
+try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch(e){}
+
+/* ---------- zip (store) + unzip ---------- */
+const CRC = (() => { const t = new Uint32Array(256); for (let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c = c&1 ? 0xEDB88320^(c>>>1) : c>>>1; t[n]=c>>>0; } return t; })();
+function crc32(u8){ let c = 0xFFFFFFFF; for (let i=0;i<u8.length;i++) c = CRC[(c^u8[i])&0xFF]^(c>>>8); return (c^0xFFFFFFFF)>>>0; }
+function zipOne(fname, data){
+  const name = new TextEncoder().encode(fname), crc = crc32(data), n = data.length;
+  const lh = new DataView(new ArrayBuffer(30));
+  lh.setUint32(0,0x04034b50,true); lh.setUint16(4,20,true); lh.setUint16(8,0,true);
+  lh.setUint32(14,crc,true); lh.setUint32(18,n,true); lh.setUint32(22,n,true); lh.setUint16(26,name.length,true);
+  const cd = new DataView(new ArrayBuffer(46));
+  cd.setUint32(0,0x02014b50,true); cd.setUint16(4,20,true); cd.setUint16(6,20,true);
+  cd.setUint32(16,crc,true); cd.setUint32(20,n,true); cd.setUint32(24,n,true); cd.setUint16(28,name.length,true);
+  cd.setUint32(42,0,true);
+  const cdOff = 30 + name.length + n, cdLen = 46 + name.length;
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0,0x06054b50,true); end.setUint16(8,1,true); end.setUint16(10,1,true);
+  end.setUint32(12,cdLen,true); end.setUint32(16,cdOff,true);
+  return new Blob([lh, name, data, cd, name, end], {type:"application/zip"});
+}
+async function unzip(buf, wantExt){
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  let e = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 66000); i--) if (dv.getUint32(i,true) === 0x06054b50){ e = i; break; }
+  if (e < 0) throw new Error("El .zip está dañado.");
+  let p = dv.getUint32(e+16,true); const count = dv.getUint16(e+10,true);
+  const found = [];
+  for (let k=0;k<count;k++){
+    const method = dv.getUint16(p+10,true), csize = dv.getUint32(p+20,true);
+    const nlen = dv.getUint16(p+28,true), xlen = dv.getUint16(p+30,true), clen = dv.getUint16(p+32,true);
+    const off = dv.getUint32(p+42,true);
+    const name = new TextDecoder().decode(u8.subarray(p+46, p+46+nlen));
+    p += 46 + nlen + xlen + clen;
+    const ext = name.split(".").pop().toLowerCase();
+    const base = name.split("/").pop();
+    if (!wantExt.includes(ext) || name.startsWith("__MACOSX") || base.startsWith("._")) continue;
+    found.push({name, method, csize, off, size: dv.getUint32(p - (46 + nlen + xlen + clen) + 24, true)});
+  }
+  found.sort((a,b) => b.size - a.size);
+  for (const {name, method, csize, off} of found){
+    const ds = off + 30 + dv.getUint16(off+26,true) + dv.getUint16(off+28,true);
+    const raw = u8.subarray(ds, ds + csize);
+    if (method === 0) return {name, data: raw.slice()};
+    if (method === 8){
+      if (typeof DecompressionStream === "undefined") throw new Error("Tu navegador no puede abrir este .zip. Descomprímelo primero.");
+      const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return {name, data: new Uint8Array(await new Response(stream).arrayBuffer())};
+    }
+    throw new Error("Formato de compresión no soportado. Descomprime el .zip primero.");
+  }
+  throw new Error("No encontré un archivo " + wantExt.map(x=>"."+x).join(" / ") + " dentro del .zip.");
+}
+
+/* ---------- UI helpers ---------- */
+let toastT = 0;
+function toast(msg, ms=1800){ const t = $("toast"); t.textContent = msg; t.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(() => t.style.opacity = 0, ms); }
+function setLed(state, text){ $("led").className = $("led2").className = "led " + (state||""); if (text != null) $("statusText").textContent = text; }
+const hhmm = (ts) => new Date(ts).toLocaleTimeString("es-CL", {hour:"2-digit", minute:"2-digit"});
+function ago(ts){
+  const s = Math.round((Date.now()-ts)/1000);
+  if (s < 10) return "recién";
+  if (s < 60) return "hace " + s + " s";
+  const m = Math.round(s/60); if (m < 60) return "hace " + m + " min";
+  const h = Math.round(m/60); if (h < 24) return "hace " + h + " h";
+  return new Date(ts).toLocaleDateString("es-CL", {day:"numeric", month:"short"});
+}
+const fmtSize = (n) => n >= 1048576 ? (n/1048576).toFixed(1) + " MB" : Math.round(n/1024) + " KB";
+const safeName = (n) => n.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9 _\-()]+/g, "_").trim().slice(0,80) || "juego";
+function armConfirm(btn, label, action){
+  // two-tap confirm, since dialogs like confirm() don't show here
+  if (btn.dataset.armed === "1"){ btn.dataset.armed = ""; btn.textContent = btn.dataset.orig; action(); return; }
+  btn.dataset.orig = btn.textContent; btn.dataset.armed = "1"; btn.textContent = label;
+  setTimeout(() => { if (btn.dataset.armed === "1"){ btn.dataset.armed = ""; btn.textContent = btn.dataset.orig; } }, 3500);
+}
+
+/* ---------- Library ---------- */
+async function renderLibrary(){
+  let metas = [];
+  try { metas = await idbAll("meta"); } catch(e){ $("libMsg").textContent = "Este navegador no permite guardar datos; tendrás que elegir la ROM cada vez y exportar tu partida al terminar."; $("libMsg").className = "msg bad"; }
+  metas.sort((a,b) => (b.played||b.added) - (a.played||a.added));
+  const box = $("games"); box.textContent = "";
+  $("gamesCard").hidden = metas.length === 0;
+  for (const m of metas){
+    let sv = null; try { sv = await idbGet("saves", m.name); } catch(e){}
+    const row = document.createElement("div"); row.className = "game";
+    const meta = document.createElement("div"); meta.className = "meta";
+    const nm = document.createElement("div"); nm.className = "name"; nm.textContent = m.name;
+    const sub = document.createElement("div"); sub.className = "sub";
+    sub.textContent = fmtSize(m.size) + " · " + (sv ? "partida guardada " + ago(sv.ts) : "sin partida aún");
+    meta.append(nm, sub);
+    const acts = document.createElement("div"); acts.className = "row"; acts.style.flexWrap = "nowrap";
+    const play = document.createElement("button"); play.className = "btn primary small"; play.textContent = "Jugar";
+    play.onclick = async () => { const data = await idbGet("roms", m.name); if (!data){ $("libMsg").textContent = "No encontré la ROM guardada; elígela de nuevo."; return; } start(m.name, new Uint8Array(data)); };
+    const del = document.createElement("button"); del.className = "btn small danger"; del.textContent = "Quitar";
+    del.onclick = () => armConfirm(del, "¿Seguro?", async () => { await idbDel("roms", m.name); await idbDel("meta", m.name); renderLibrary(); });
+    acts.append(play, del);
+    row.append(meta, acts); box.append(row);
+  }
+}
+$("romBtn").onclick = () => { $("libMsg").textContent = ""; $("romInput").click(); };
+$("saveBtn").onclick = () => $("saveInput").click();
+$("romInput").addEventListener("change", (ev) => { const f = ev.target.files[0]; ev.target.value = ""; if (f) loadRomFile(f); });
+document.addEventListener("dragover", (e) => { if (!running) e.preventDefault(); });
+document.addEventListener("drop", (e) => { if (running) return; e.preventDefault(); const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadRomFile(f); });
+async function loadRomFile(f){
+  const msg = $("libMsg"); msg.className = "msg"; msg.textContent = "Leyendo " + f.name + "…";
+  try {
+    let name = f.name, data = new Uint8Array(await f.arrayBuffer());
+    if (/\.zip$/i.test(name)){ const z = await unzip(data.buffer, ["gba","gbc","gb"]); name = z.name.split("/").pop(); data = z.data; }
+    if (!/\.(gba|gbc|gb)$/i.test(name)) throw new Error("Ese archivo no parece una ROM (.gba, .gbc o .gb).");
+    try {
+      await idbPut("roms", name, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+      await idbPut("meta", name, {name, size:data.length, added:Date.now(), played:Date.now()});
+    } catch(e){ /* storage full or blocked: still playable this session */ }
+    msg.textContent = "";
+    start(name, data);
+  } catch(e){ msg.className = "msg bad"; msg.textContent = e.message || String(e); }
+}
+
+/* ---------- Emulator ---------- */
+let Module = null, FS = null, fn = null, running = false, game = null, savePath = null, lastSaveBytes = null, lastSaveTs = 0, timers = [], ff = false, pausedByHide = false;
+
+function same(a, b){ if (!a || !b || a.length !== b.length) return false; for (let i=0;i<a.length;i++) if (a[i] !== b[i]) return false; return true; }
+function blank(a){ for (let i=0;i<a.length;i++) if (a[i] !== 0xFF && a[i] !== 0) return false; return true; }
+function mkdirp(path){ let cur = ""; for (const part of path.split("/").filter(Boolean)){ cur += "/" + part; try { FS.mkdir(cur); } catch(e){} } }
+function writeFile(path, data){ mkdirp(path.split("/").slice(0,-1).join("/")); FS.writeFile(path, data); }
+
+const RA_CFG = [
+  'savefile_directory = "/saves"', 'savestate_directory = "/states"', 'system_directory = "/system"',
+  'autosave_interval = "0"', 'block_sram_overwrite = "false"', 'savestate_auto_save = "false"', 'savestate_auto_load = "false"',
+  'config_save_on_exit = "false"', 'video_vsync = "true"', 'video_smooth = "false"', 'video_font_enable = "false"',
+  'audio_latency = "64"', 'fastforward_ratio = "4.0"', 'input_exit_emulator = "nul"', 'input_menu_toggle = "nul"',
+  'menu_enable_widgets = "false"', 'notification_show_fast_forward = "false"', 'screenshot_directory = "/"'
+].join("\n") + "\n";
+
+async function start(name, romBytes){
+  $("lib").hidden = true; $("play").hidden = false; document.body.classList.add("playing");
+  $("gameName").textContent = name.replace(/\.[^.]+$/, "");
+  $("ovTitle").textContent = "Cargando motor…"; $("ovSub").textContent = "mGBA"; $("overlay").hidden = false;
+  setLed("busy", "Cargando");
+  game = {name, base: safeName(name), ext: (name.split(".").pop() || "gba").toLowerCase()};
+  try { const m = await idbGet("meta", name); if (m){ m.played = Date.now(); await idbPut("meta", name, m); } } catch(e){}
+
+  if (typeof window.EJS_Runtime !== "function"){ fatal("No se pudo cargar el motor del emulador.", "Recarga la página."); return; }
+  try {
+    Module = await window.EJS_Runtime({
+      noInitialRun: true, canvas: $("canvas"), parent: $("screen"), arguments: [], preRun: [], postRun: [],
+      callbacks: { setupCoreSettingFile: (p) => { try { writeFile(p, 'mgba_skip_bios = "ON"\nmgba_frameskip = "0"\n'); } catch(e){} } },
+      print: () => {}, printErr: () => {},
+      locateFile: (f) => f.endsWith(".wasm") ? "mgba_libretro.wasm" : f,
+      getSavExt: () => ".srm"
+    });
+  } catch(e){
+    fatal("Este navegador o esta vista bloqueó el motor (WebAssembly).", "Prueba abriendo el link en Chrome del celular o del PC.");
+    console.error(e); return;
+  }
+  FS = Module.FS;
+  const w = (n, r, a) => Module.cwrap(n, r, a);
+  fn = {
+    restart: w("system_restart","",[]), stateInfo: w("save_state_info","string",[]), loadState: w("load_state","number",["string","number"]),
+    input: w("simulate_input","null",["number","number","number"]), loop: w("toggleMainLoop","null",["number"]),
+    savePath: w("save_file_path","string",[]), flush: w("cmd_savefiles","",[]), reloadSave: w("refresh_save_files","null",[]),
+    ff: w("toggle_fastforward","null",["number"]), ffRatio: w("set_ff_ratio","null",["number"]),
+    keyboard: w("ejs_set_keyboard_enabled","null",["number"]),
+    frames: w("get_current_frame_count","number",[])
+  };
+  writeFile("/home/web_user/.config/retroarch/retroarch.cfg", RA_CFG);
+  const romPath = "/roms/" + game.base + "." + game.ext;
+  writeFile(romPath, romBytes);
+  mkdirp("/states"); mkdirp("/system");
+  // restore the save before the game boots
+  let sv = null; try { sv = await idbGet("saves", name); } catch(e){}
+  savePath = "/saves/" + game.base + ".srm";
+  if (sv && sv.data){ writeFile(savePath, new Uint8Array(sv.data)); lastSaveBytes = new Uint8Array(sv.data); lastSaveTs = sv.ts; }
+  else { lastSaveBytes = null; lastSaveTs = 0; }
+
+  $("ovTitle").textContent = "Iniciando juego…";
+  try {
+    Module.callMain([romPath]);
+    Module.resumeMainLoop && Module.resumeMainLoop();
+  } catch(e){ fatal("El juego no arrancó.", String(e && e.message || e)); return; }
+  running = true;
+  try { fn.keyboard(0); } catch(e){}
+  try { fn.ffRatio(ffRate); } catch(e){}
+  setTimeout(applyVolume, 300);
+  // if RetroArch picked a different save path, move our save there
+  try {
+    const real = fn.savePath();
+    if (real && real !== savePath){ if (lastSaveBytes){ writeFile(real, lastSaveBytes); fn.reloadSave(); fn.restart(); } savePath = real; }
+  } catch(e){}
+  $("overlay").hidden = true;
+  updateStatus();
+  timers.push(setInterval(flushSave, FLUSH_MS));
+  timers.push(setInterval(autoState, AUTOSTATE_MS));
+  timers.push(setInterval(updateStatus, 15000));
+  // offer to resume from the automatic snapshot
+  try {
+    const st = await idbGet("states", name + "|auto");
+    if (st) offerResume(st);
+  } catch(e){}
+}
+function fatal(title, sub){ $("ovTitle").textContent = title; $("ovSub").textContent = sub || ""; $("overlay").hidden = false; setLed("bad", "Error"); }
+
+function updateStatus(){
+  if (!running) return;
+  if (lastSaveTs) setLed("ok", "Partida respaldada " + ago(lastSaveTs));
+  else setLed("", "Aún sin partida guardada");
+}
+async function flushSave(){
+  if (!running || !fn) return;
+  try {
+    fn.flush();
+    if (!FS.analyzePath(savePath).exists) return;
+    const d = FS.readFile(savePath);
+    if (same(d, lastSaveBytes)) return;
+    if (blank(d) && lastSaveBytes && !blank(lastSaveBytes)){
+      // never let an empty save overwrite a real one silently
+      await histAdd(game.name, lastSaveBytes.slice().buffer);
+    }
+    const copy = d.slice();
+    await idbPut("saves", game.name, {data: copy.buffer, ts: Date.now()});
+    // keep an older version every few minutes
+    if (!blank(copy)){
+      const hist = await histList(game.name);
+      const newest = hist.reduce((m, x) => Math.max(m, x.ts), 0);
+      if (Date.now() - newest > HISTORY_GAP_MS) await histAdd(game.name, copy.slice().buffer);
+    }
+    lastSaveBytes = copy; lastSaveTs = Date.now();
+    updateStatus();
+    if (!blank(copy)) toast("Partida respaldada");
+  } catch(e){ setLed("bad", "No se pudo respaldar"); console.error(e); }
+}
+function grabState(){
+  const info = fn.stateInfo().split("|");
+  if (info[2] !== "1") throw new Error("estado no disponible");
+  const size = parseInt(info[0]), at = parseInt(info[1]);
+  return Module.HEAPU8.slice(at, at + size);
+}
+async function autoState(){
+  if (!running || document.hidden) return;
+  try { const s = grabState(); await idbPut("states", game.name + "|auto", {data: s.buffer, ts: Date.now()}); } catch(e){}
+}
+function applyState(bytes){
+  try { FS.unlink("/game.state"); } catch(e){}
+  FS.writeFile("/game.state", new Uint8Array(bytes));
+  fn.loadState("game.state", 0);
+}
+function offerResume(st){
+  const t = $("toast");
+  const bar = document.createElement("div");
+  bar.className = "overlay"; bar.style.background = "rgba(11,10,16,.88)";
+  const s = document.createElement("strong"); s.textContent = "¿Volver a donde estabas?";
+  const p = document.createElement("span"); p.textContent = "Estado automático de las " + hhmm(st.ts) + " (" + ago(st.ts) + ")";
+  const row = document.createElement("div"); row.className = "row"; row.style.justifyContent = "center";
+  const yes = document.createElement("button"); yes.className = "btn primary small"; yes.textContent = "Sí, retomar";
+  const no = document.createElement("button"); no.className = "btn small"; no.textContent = "No, empezar normal";
+  yes.onclick = () => { try { applyState(st.data); toast("Retomado"); } catch(e){ toast("No se pudo retomar"); } bar.remove(); };
+  no.onclick = () => bar.remove();
+  row.append(yes, no); bar.append(s, p, row);
+  $("screen").insertBefore(bar, t);
+  setTimeout(() => bar.remove(), 20000);
+}
+
+/* ---------- menu actions ---------- */
+const FF_RATES = [2, 3, 4, 6, 8];
+let ffRate = 4;
+try { const v = parseInt(localStorage.getItem("ra-ff")); if (FF_RATES.includes(v)) ffRate = v; } catch(e){}
+function paintFF(){
+  $("ffBtn").textContent = "×" + ffRate;
+  const box = $("ffOpts"); box.textContent = "";
+  FF_RATES.forEach(r => {
+    const b = document.createElement("button"); b.className = "btn small"; b.type = "button";
+    b.textContent = "×" + r; b.setAttribute("aria-pressed", r === ffRate ? "true" : "false");
+    if (r === ffRate){ b.style.borderColor = "var(--accent)"; b.style.color = "var(--accent)"; }
+    b.onclick = () => { setRate(r); };
+    box.append(b);
+  });
+}
+function setRate(r){
+  ffRate = r; try { localStorage.setItem("ra-ff", String(r)); } catch(e){}
+  if (fn){
+    try { if (ff) fn.ff(0); fn.ffRatio(r); } catch(e){}
+    if (ff) setTimeout(() => { try { if (ff) fn.ff(1); } catch(e){} }, 60);
+  }
+  paintFF();
+}
+function setFF(on){ ff = on; try { fn.ff(on ? 1 : 0); } catch(e){} $("ffBtn").setAttribute("aria-pressed", on ? "true" : "false"); }
+paintFF();
+$("ffBtn").onclick = () => running && setFF(!ff);
+$("saveStateBtn").onclick = async () => {
+  if (!running) return;
+  try { const s = grabState(); await idbPut("states", game.name + "|1", {data: s.buffer, ts: Date.now()}); toast("Estado guardado " + hhmm(Date.now())); }
+  catch(e){ toast("No se pudo guardar el estado"); }
+  $("menu").close();
+};
+$("loadStateBtn").onclick = async () => {
+  if (!running) return;
+  const btn = $("loadStateBtn");
+  const st = await idbGet("states", game.name + "|1").catch(() => null);
+  if (!st){ toast("Aún no hay estado guardado"); return; }
+  armConfirm(btn, "¿Cargar el de las " + hhmm(st.ts) + "?", () => { try { applyState(st.data); $("menu").close(); toast("Estado cargado"); } catch(e){ toast("No se pudo cargar"); } });
+};
+
+/* sound */
+let muted = false;
+try { muted = localStorage.getItem("ra-muted") === "1"; } catch(e){}
+function applyVolume(){
+  try { const ctx = Module && Module.AL && Module.AL.currentCtx; if (ctx && ctx.sources) ctx.sources.forEach(src => { if (src && src.gain) src.gain.gain.value = muted ? 0 : 1; }); } catch(e){}
+}
+function paintSound(){ $("soundBtn").textContent = muted ? "Sonido: no" : "Sonido: sí"; $("soundBtn").setAttribute("aria-pressed", muted ? "false" : "true"); }
+$("soundBtn").onclick = () => { muted = !muted; try { localStorage.setItem("ra-muted", muted ? "1" : "0"); } catch(e){} applyVolume(); paintSound(); };
+setInterval(() => { if (running && muted) applyVolume(); }, 700);
+paintSound();
+
+/* fullscreen */
+function paintFs(){ $("fsBtn").textContent = document.fullscreenElement ? "Salir de pantalla completa" : "Pantalla completa"; }
+$("fsBtn").onclick = async () => {
+  try {
+    if (document.fullscreenElement){ await document.exitFullscreen(); }
+    else {
+      await document.documentElement.requestFullscreen({navigationUI: "hide"});
+      try { await screen.orientation.lock("landscape"); } catch(e){}
+      $("menu").close();
+    }
+  } catch(e){ $("menuMsg").className = "msg bad"; $("menuMsg").textContent = "Esta vista no permite pantalla completa. Gira el celular o abre el link en Chrome."; }
+  paintFs();
+};
+document.addEventListener("fullscreenchange", paintFs);
+$("menuBtn").onclick = async () => {
+  if (!running) return;
+  $("menu").showModal(); $("menuMsg").textContent = ""; paintFs();
+  $("fpsNote").textContent = ff
+    ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (fps / 60 < ffRate * 0.85 ? " · tu equipo no alcanza esa velocidad" : "")
+    : "Velocidad del juego: " + fps + " cuadros/s" + (fps >= 57 ? " · normal" : " · más lento de lo normal (lo normal es 60)");
+  await flushSave(); await renderHistory();
+  const st = await idbGet("states", game.name + "|1").catch(() => null);
+  $("stateNote").textContent = st ? "Último estado guardado: " + hhmm(st.ts) + " (" + ago(st.ts) + ")." : "Guarda el momento exacto, aunque no hayas guardado dentro del juego.";
+};
+$("closeMenu").onclick = () => $("menu").close();
+$("restartBtn").onclick = () => armConfirm($("restartBtn"), "¿Reiniciar?", async () => { await flushSave(); fn.restart(); $("menu").close(); });
+$("quitBtn").onclick = () => armConfirm($("quitBtn"), "Guardar y salir", async () => {
+  await flushSave(); await autoState();
+  timers.forEach(clearInterval); timers = []; running = false;
+  // the wasm runtime can't be cleanly torn down; reload gives a fresh engine
+  location.reload();
+});
+
+async function renderHistory(){
+  const box = $("hist"); box.textContent = "";
+  let list = []; try { list = await histList(game.name); } catch(e){}
+  list.sort((a,b) => b.ts - a.ts);
+  if (!list.length){ const p = document.createElement("p"); p.className = "note"; p.textContent = "Se crea una versión cada pocos minutos de juego, cuando el juego guarda."; box.append(p); return; }
+  for (const h of list){
+    const row = document.createElement("div"); row.className = "game";
+    const meta = document.createElement("div"); meta.className = "meta";
+    const nm = document.createElement("div"); nm.className = "name"; nm.textContent = new Date(h.ts).toLocaleString("es-CL", {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"});
+    const sub = document.createElement("div"); sub.className = "sub"; sub.textContent = ago(h.ts) + " · " + fmtSize(h.data.byteLength);
+    meta.append(nm, sub);
+    const b = document.createElement("button"); b.className = "btn small"; b.textContent = "Restaurar";
+    b.onclick = () => armConfirm(b, "¿Reemplazar?", () => replaceSave(new Uint8Array(h.data), "Versión restaurada"));
+    row.append(meta, b); box.append(row);
+  }
+}
+async function replaceSave(bytes, label){
+  try {
+    await flushSave();
+    if (lastSaveBytes && !blank(lastSaveBytes)) await histAdd(game.name, lastSaveBytes.slice().buffer);
+    writeFile(savePath, bytes);
+    fn.reloadSave(); fn.restart();
+    lastSaveBytes = bytes.slice();
+    await idbPut("saves", game.name, {data: lastSaveBytes.slice().buffer, ts: Date.now()});
+    lastSaveTs = Date.now();
+    // the old automatic state belongs to the replaced save
+    try { await idbDel("states", game.name + "|auto"); } catch(e){}
+    updateStatus(); $("menu").close(); toast(label + " · juego reiniciado", 2600);
+  } catch(e){ $("menuMsg").className = "msg bad"; $("menuMsg").textContent = "No se pudo reemplazar: " + (e.message || e); }
+}
+$("saveInput").addEventListener("change", async (ev) => {
+  const f = ev.target.files[0]; ev.target.value = "";
+  if (!f || !running) return;
+  const msg = $("menuMsg"); msg.className = "msg";
+  try {
+    let data = new Uint8Array(await f.arrayBuffer());
+    if (/\.zip$/i.test(f.name)) data = (await unzip(data.buffer, ["sav","srm"])).data;
+    else if (!/\.(sav|srm|sa1|dat)$/i.test(f.name) && data.length > 0x40000) throw new Error("Eso no parece una partida (.sav o .srm).");
+    if (data.length < 512) throw new Error("El archivo de partida está vacío o incompleto.");
+    await replaceSave(data, "Partida importada");
+  } catch(e){ msg.className = "msg bad"; msg.textContent = e.message || String(e); }
+});
+$("exportBtn").onclick = async () => {
+  const msg = $("menuMsg"); msg.className = "msg";
+  await flushSave();
+  if (!lastSaveBytes){ msg.className = "msg bad"; msg.textContent = "Aún no hay partida para exportar. Guarda dentro del juego primero."; return; }
+  const d0 = new Date(), z2 = (n) => String(n).padStart(2, "0"); const stamp = d0.getFullYear() + z2(d0.getMonth()+1) + z2(d0.getDate()) + "-" + z2(d0.getHours()) + z2(d0.getMinutes());
+  const fname = game.base + "-" + stamp + ".sav";
+  const url = URL.createObjectURL(new Blob([lastSaveBytes], {type: "application/octet-stream"}));
+  const a = document.createElement("a"); a.href = url; a.download = fname; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  msg.className = "msg ok"; msg.textContent = "Descargado " + fname + ". Para My Boy o Pizza Boy, renómbralo igual que la ROM (" + game.base + ".sav).";
+};
+
+/* ---------- pause on hide, flush on leave ---------- */
+document.addEventListener("visibilitychange", () => {
+  if (!running) return;
+  if (document.hidden){ flushSave(); autoState(); try { fn.loop(0); pausedByHide = true; } catch(e){} }
+  else if (pausedByHide){ try { fn.loop(1); } catch(e){} pausedByHide = false; }
+});
+window.addEventListener("pagehide", () => { if (running) flushSave(); });
+
+/* ---------- input: touch ---------- */
+const pressed = new Set(); const pointers = new Map();
+function dpadDirs(el, x, y){
+  const r = el.getBoundingClientRect(); const dx = x - (r.left + r.width/2), dy = y - (r.top + r.height/2);
+  if (Math.hypot(dx, dy) < r.width * 0.12) return [];
+  const sector = ((Math.round(Math.atan2(dy, dx) / (Math.PI/4)) % 8) + 8) % 8;
+  return [["RIGHT"],["RIGHT","DOWN"],["DOWN"],["DOWN","LEFT"],["LEFT"],["LEFT","UP"],["UP"],["UP","RIGHT"]][sector];
+}
+function btnsAt(x, y){
+  const el = document.elementFromPoint(x, y); const b = el && el.closest && el.closest("[data-btn]");
+  if (!b) return [];
+  return b.dataset.btn === "DPAD" ? dpadDirs(b, x, y) : [b.dataset.btn];
+}
+function sync(){
+  const next = new Set(); pointers.forEach(s => s.forEach(b => next.add(b))); keysDown.forEach(b => next.add(b));
+  next.forEach(b => { if (!pressed.has(b)){ pressed.add(b); send(b, 1); if (navigator.vibrate) try { navigator.vibrate(8); } catch(e){} } });
+  [...pressed].forEach(b => { if (!next.has(b)){ pressed.delete(b); send(b, 0); } });
+  document.querySelectorAll("[data-btn]").forEach(el => { if (el.dataset.btn !== "DPAD") el.classList.toggle("on", pressed.has(el.dataset.btn)); });
+  document.querySelectorAll(".dpad em").forEach(el => el.classList.toggle("on", pressed.has(el.dataset.d)));
+}
+/* Every press and every release is held for at least 2 emulated frames, in order,
+   so quick taps are never lost even when the phone runs the game below full speed. */
+const inq = {}, sent = {}, changedAt = {};
+function send(b, v){ (inq[b] = inq[b] || []).push(v); }
+function frameNow(){ try { return fn.frames(); } catch(e){ return 0; } }
+let fpsLast = {t: performance.now(), f: 0}, fps = 0;
+setInterval(() => {
+  if (!running || !fn) return;
+  const f = frameNow();
+  for (const b in inq){
+    const q = inq[b]; if (!q.length) continue;
+    if (sent[b] !== undefined && f - changedAt[b] < 2) continue;
+    let v = q.shift();
+    while (q.length && v === (sent[b] || 0)) v = q.shift();
+    if (v === (sent[b] || 0)) continue;
+    try { fn.input(0, BTN[b], v); } catch(e){}
+    sent[b] = v; changedAt[b] = f;
+  }
+  const now = performance.now();
+  if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; }
+}, 8);
+const padEl = $("pad");
+padEl.addEventListener("pointerdown", (e) => {
+  if (!e.target.closest || !e.target.closest("[data-btn]")) return;
+  e.preventDefault(); unlockAudio();
+  pointers.set(e.pointerId, btnsAt(e.clientX, e.clientY)); sync();
+});
+window.addEventListener("pointermove", (e) => { if (!pointers.has(e.pointerId)) return; pointers.set(e.pointerId, btnsAt(e.clientX, e.clientY)); sync(); });
+const up = (e) => { if (pointers.delete(e.pointerId)) sync(); };
+window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+padEl.addEventListener("contextmenu", (e) => e.preventDefault());
+
+/* ---------- input: keyboard ---------- */
+const KEYS = {ArrowUp:"UP",ArrowDown:"DOWN",ArrowLeft:"LEFT",ArrowRight:"RIGHT",KeyX:"A",KeyZ:"B",Enter:"START",ShiftLeft:"SELECT",ShiftRight:"SELECT",Backspace:"SELECT",KeyA:"L",KeyS:"R"};
+const keysDown = new Set();
+window.addEventListener("keydown", (e) => {
+  if (!running || $("menu").open) return;
+  if (e.code === "Space"){ e.preventDefault(); if (!e.repeat) setFF(!ff); return; }
+  const b = KEYS[e.code]; if (!b) return;
+  e.preventDefault(); unlockAudio(); keysDown.add(b); sync();
+});
+window.addEventListener("keyup", (e) => { const b = KEYS[e.code]; if (b && keysDown.delete(b)) sync(); });
+window.addEventListener("blur", () => { keysDown.clear(); pointers.clear(); sync(); });
+
+function unlockAudio(){
+  try { const c = Module && Module.AL && Module.AL.currentCtx && Module.AL.currentCtx.audioCtx; if (c && c.state !== "running") c.resume(); } catch(e){}
+}
+document.addEventListener("pointerdown", unlockAudio, {passive:true});
+
+renderLibrary();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+})();
+</script>
+
+</body>
+</html>
