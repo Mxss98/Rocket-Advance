@@ -43,10 +43,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #play{position:fixed;inset:0;background:#000;z-index:5;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overflow:hidden
   ;--u:min(1vw,1vh);--s:clamp(60px, 15*var(--u), 92px);--gap:max(10px, env(safe-area-inset-left, 0px));--top:max(8px, env(safe-area-inset-top, 0px));--bot:max(12px, env(safe-area-inset-bottom, 0px))}
 .screen{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw, 150vh);width:min(100vw, 150dvh);aspect-ratio:3/2;max-width:100%;background:#000;overflow:hidden}
-/* The engine sizes its drawing buffer from the canvas' CSS box, in CSS pixels. Making the box --dpr times
-   larger and shrinking it back with a transform gives a buffer with one pixel per screen pixel, so the
-   game is scaled once, sharply, instead of being scaled twice and smeared. */
-.screen canvas{position:absolute;left:0;top:0;width:calc(100% * var(--dpr, 1))!important;height:calc(100% * var(--dpr, 1))!important;transform:scale(calc(1 / var(--dpr, 1)));transform-origin:0 0;image-rendering:pixelated;display:block}
+/* The engine sizes its drawing buffer from the canvas' CSS box, in CSS pixels. --rs enlarges that box and a
+   transform shrinks it back, so the page picks the buffer size: one pixel per screen pixel for "Píxeles",
+   or 1x/2x the GBA resolution, then smoothed by the browser, for "Suave"/"Media" (the look My Boy uses). */
+.screen canvas{position:absolute;left:0;top:0;width:calc(100% * var(--rs, 1))!important;height:calc(100% * var(--rs, 1))!important;transform:scale(calc(1 / var(--rs, 1)));transform-origin:0 0;image-rendering:pixelated;display:block}
+.screen.smooth canvas{image-rendering:auto}
 .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;text-align:center;background:#000;color:var(--mute);font-size:14px;touch-action:auto}
 .overlay strong{color:var(--ink);font-weight:600}
 .toast{position:absolute;left:50%;top:12%;transform:translateX(-50%);background:rgba(10,9,14,.85);border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:6px 12px;font-size:13px;white-space:nowrap;pointer-events:none;transition:opacity .25s;z-index:2}
@@ -197,6 +198,7 @@ body.playing header{display:none}
       <span class="lbl">SONIDO Y PANTALLA</span>
       <div class="row">
         <button class="btn small" id="soundBtn" aria-pressed="true">Sonido: sí</button>
+        <button class="btn small" id="imgBtn">Imagen: suave</button>
         <button class="btn small" id="fsBtn">Pantalla completa</button>
       </div>
     </div>
@@ -222,7 +224,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 3 · motor mGBA</p>
+    <p class="note">Versión 4 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -497,10 +499,13 @@ function updateStatus(){
 async function flushSave(){
   if (!running || !fn) return;
   try {
+    const t0 = performance.now();
     fn.flush();
     if (!FS.analyzePath(savePath).exists) return;
     const d = FS.readFile(savePath);
-    if (same(d, lastSaveBytes)) return;
+    const isSame = same(d, lastSaveBytes);
+    backupMs = Math.max(backupMs * 0.9, performance.now() - t0);
+    if (isSame) return;
     if (blank(d) && lastSaveBytes && !blank(lastSaveBytes)){
       // never let an empty save overwrite a real one silently
       await histAdd(game.name, lastSaveBytes.slice().buffer);
@@ -526,7 +531,7 @@ function grabState(){
 }
 async function autoState(){
   if (!running || document.hidden) return;
-  try { const s = grabState(); await idbPut("states", game.name + "|auto", {data: s.buffer, ts: Date.now()}); } catch(e){}
+  try { const t0 = performance.now(); const s = grabState(); backupMs = Math.max(backupMs * 0.9, performance.now() - t0); await idbPut("states", game.name + "|auto", {data: s.buffer, ts: Date.now()}); } catch(e){}
 }
 function applyState(bytes){
   try { FS.unlink("/game.state"); } catch(e){}
@@ -620,6 +625,7 @@ $("menuBtn").onclick = async () => {
   $("fpsNote").textContent = ff
     ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (fps / 60 < ffRate * 0.85 ? " · tu equipo no alcanza esa velocidad" : "")
     : "Velocidad del juego: " + fps + " cuadros/s" + (fps >= 57 ? " · normal" : " · más lento de lo normal (lo normal es 60)");
+  $("fpsNote").textContent += " · Tirones en el último minuto: " + jankCount() + " · Pausa por respaldo: " + Math.round(backupMs) + " ms";
   await flushSave(); await renderHistory();
   const st = await idbGet("states", game.name + "|1").catch(() => null);
   $("stateNote").textContent = st ? "Último estado guardado: " + hhmm(st.ts) + " (" + ago(st.ts) + ")." : "Guarda el momento exacto, aunque no hayas guardado dentro del juego.";
@@ -764,10 +770,34 @@ function unlockAudio(){
 }
 document.addEventListener("pointerdown", unlockAudio, {passive:true});
 
-function setDpr(){ document.documentElement.style.setProperty("--dpr", String(window.devicePixelRatio || 1)); }
-setDpr();
-window.addEventListener("resize", setDpr);
-try { matchMedia("(resolution: " + (window.devicePixelRatio || 1) + "dppx)").addEventListener("change", setDpr); } catch(e){}
+// "smooth" draws the game at its real 240x160 and lets the browser smooth it up (the My Boy look);
+// "medium" draws it at 2x first (softer edges, less blur); "pixel" draws one pixel per screen pixel.
+const IMG_MODES = {smooth: {k: 1, label: "Imagen: suave"}, medium: {k: 2, label: "Imagen: media"}, pixel: {k: 0, label: "Imagen: píxeles"}};
+const IMG_ORDER = ["smooth", "medium", "pixel"];
+let imgMode = "smooth";
+try { const v = localStorage.getItem("ra-img2"); if (IMG_MODES[v]) imgMode = v; } catch(e){}
+function applyScale(){
+  const sc = $("screen");
+  const w = sc.getBoundingClientRect().width || window.innerWidth;
+  const k = IMG_MODES[imgMode].k;
+  const f = k ? Math.max(0.1, (240 * k) / w) : (window.devicePixelRatio || 1);
+  document.documentElement.style.setProperty("--rs", f.toFixed(5));
+  sc.classList.toggle("smooth", k > 0);
+  $("imgBtn").textContent = IMG_MODES[imgMode].label;
+}
+$("imgBtn").onclick = () => { imgMode = IMG_ORDER[(IMG_ORDER.indexOf(imgMode) + 1) % IMG_ORDER.length]; try { localStorage.setItem("ra-img2", imgMode); } catch(e){} applyScale(); };
+applyScale();
+window.addEventListener("resize", applyScale);
+try { new ResizeObserver(applyScale).observe($("screen")); } catch(e){}
+
+/* stutter diagnostics: screen refreshes that took longer than 50 ms, and how long backups block the game */
+const janks = []; let lastRaf = 0, backupMs = 0;
+function rafTick(t){
+  if (running && lastRaf && !document.hidden && !$("menu").open && t - lastRaf > 50){ janks.push(t); if (janks.length > 500) janks.shift(); }
+  lastRaf = t; requestAnimationFrame(rafTick);
+}
+requestAnimationFrame(rafTick);
+const jankCount = () => { const now = performance.now(); return janks.filter((x) => now - x < 60000).length; };
 renderLibrary();
 if ("serviceWorker" in navigator){
   const hadController = !!navigator.serviceWorker.controller;
