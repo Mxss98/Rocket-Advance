@@ -224,7 +224,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 6 · motor mGBA</p>
+    <p class="note">Versión 7 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -668,8 +668,8 @@ $("menuBtn").onclick = async () => {
   $("menu").showModal(); $("menuMsg").textContent = ""; paintFs();
   $("fpsNote").textContent = ff
     ? (ffRate
-        ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (cpuLimited || (settled[ffRate] && fps / 60 < ffRate * 0.85) ? " · tu equipo no da más que eso ahora" : (!settled[ffRate] && fps / 60 < ffRate * 0.93 ? " · ajustando…" : ""))
-        : "Velocidad real: ×" + (fps / 60).toFixed(1) + " (lo máximo que da tu equipo)")
+        ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (cpuLimited || (settled[ffRate] && fps / 60 < ffRate * 0.85) ? " · es lo máximo de esta app en tu celular" : (!settled[ffRate] && fps / 60 < ffRate * 0.93 ? " · ajustando…" : ""))
+        : "Velocidad real: ×" + (fps / 60).toFixed(1) + " (lo máximo de esta app en tu celular)")
     : "Velocidad del juego: " + fps + " cuadros/s" + (fps >= 57 ? " · normal" : " · más lento de lo normal (lo normal es 60)");
   $("fpsNote").textContent += " · Tirones en el último minuto: " + jankCount() + " · Pausa por respaldo: " + Math.round(backupMs) + " ms";
   await flushSave(); await renderHistory();
