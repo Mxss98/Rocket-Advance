@@ -121,6 +121,13 @@ dialog::backdrop{background:rgba(5,4,10,.6)}
 .sheet h3{margin:0;font-size:16px;font-weight:600}
 .sheet .grp{display:flex;flex-direction:column;gap:8px}
 .sheet .lbl{font-family:var(--f-display);font-size:10px;letter-spacing:.08em;color:var(--mute)}
+.field{background:var(--raise);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font:inherit;font-size:14px;width:100%;box-sizing:border-box}
+textarea.field{font-family:ui-monospace,"Courier New",monospace;font-size:13px;resize:vertical;text-transform:uppercase}
+textarea.field::placeholder{text-transform:none;font-family:var(--f-body)}
+.field:focus{outline:2px solid var(--accent);outline-offset:1px}
+.cheats{display:flex;flex-direction:column}
+.cheats .game{padding:8px 0}
+.cheats .sub{font-family:ui-monospace,"Courier New",monospace;font-size:12px;word-break:break-all}
 .hist{display:flex;flex-direction:column;gap:0;max-height:220px;overflow:auto}
 .hist .game{padding:8px 0}
 .note{font-size:13px;color:var(--mute);line-height:1.45;margin:0}
@@ -222,6 +229,15 @@ body.playing header{display:none}
       <p class="msg" id="menuMsg"></p>
     </div>
     <div class="grp">
+      <span class="lbl">TRUCOS (GAMESHARK · ACTION REPLAY · CODEBREAKER)</span>
+      <div class="cheats" id="cheatList"></div>
+      <input id="cheatName" class="field" type="text" maxlength="40" placeholder="Nombre (ej: Caramelos raros)" autocomplete="off">
+      <textarea id="cheatCode" class="field" rows="3" placeholder="Código, un par por línea:&#10;XXXXXXXX YYYYYYYY  (GameShark / Action Replay)&#10;XXXXXXXX YYYY  (CodeBreaker)" autocomplete="off" autocapitalize="characters" spellcheck="false"></textarea>
+      <div class="row"><button class="btn small" id="cheatAdd" type="button">Agregar truco</button></div>
+      <p class="note">Ojo: los códigos hechos para Pokémon Esmeralda pueden no funcionar en este hack, o dañar la partida. Al activar un truco, la partida actual se copia antes a "Versiones anteriores".</p>
+      <p class="msg" id="cheatMsg"></p>
+    </div>
+    <div class="grp">
       <span class="lbl">VERSIONES ANTERIORES</span>
       <div class="hist" id="hist"></div>
     </div>
@@ -233,7 +249,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 13 · motor mGBA</p>
+    <p class="note">Versión 14 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -488,7 +504,9 @@ async function start(name, romBytes){
     ff: w("toggle_fastforward","null",["number"]), ffRatio: w("set_ff_ratio","null",["number"]),
     keyboard: w("ejs_set_keyboard_enabled","null",["number"]),
     frames: w("get_current_frame_count","number",[]),
-    shader: w("shader_enable","null",["number"])
+    shader: w("shader_enable","null",["number"]),
+    cheatSet: w("set_cheat","null",["number","number","string"]),
+    cheatReset: w("reset_cheat","null",[])
   };
   writeFile("/home/web_user/.config/retroarch/retroarch.cfg", RA_CFG);
   const romPath = "/roms/" + game.base + "." + game.ext;
@@ -509,6 +527,7 @@ async function start(name, romBytes){
   try { fn.keyboard(0); } catch(e){}
   try { fn.ffRatio(ffRate || 0); } catch(e){}
   applyShader();
+  applyCheats();
   setTimeout(applyVolume, 300);
   // if RetroArch picked a different save path, move our save there
   try {
@@ -714,7 +733,7 @@ $("fsBtn").onclick = async () => {
 document.addEventListener("fullscreenchange", paintFs);
 $("menuBtn").onclick = async () => {
   if (!running) return;
-  $("menu").showModal(); $("menuMsg").textContent = ""; paintFs(); syncLoop();
+  $("menu").showModal(); $("menuMsg").textContent = ""; renderCheats(); paintFs(); syncLoop();
   $("fpsNote").textContent = ff
     ? (ffRate
         ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (cpuLimited || (settled[ffRate] && fps / 60 < ffRate * 0.85) ? " · es lo máximo de esta app en tu celular" : (!settled[ffRate] && fps / 60 < ffRate * 0.93 ? " · ajustando…" : ""))
@@ -985,6 +1004,71 @@ function rafTick(t){
   lastRaf = t; requestAnimationFrame(rafTick);
 }
 const jankCount = () => { const now = performance.now(); return janks.filter((x) => now - x < 60000).length; };
+/* ---------- cheats (GameShark / Action Replay / CodeBreaker), stored per game on this device ---------- */
+const cheatKey = () => "ra-cheats:" + (game ? game.name : "");
+function loadCheats(){ try { const v = JSON.parse(localStorage.getItem(cheatKey()) || "[]"); return Array.isArray(v) ? v : []; } catch(e){ return []; } }
+function saveCheats(list){ try { localStorage.setItem(cheatKey(), JSON.stringify(list)); } catch(e){} }
+// one code per line: 8+8 hex (GameShark / Action Replay) or 8+4 hex (CodeBreaker); the engine takes them joined by "+"
+function parseCheat(text){
+  const lines = text.toUpperCase().split(/[\n;]+/).map((l) => l.replace(/[^0-9A-F]/g, "")).filter(Boolean);
+  if (!lines.length) throw new Error("Escribe al menos un código.");
+  const out = lines.map((l, i) => {
+    if (l.length === 16) return l.slice(0, 8) + " " + l.slice(8);
+    if (l.length === 12) return l.slice(0, 8) + " " + l.slice(8);
+    throw new Error("La línea " + (i + 1) + " no tiene el largo de un código (debe ser XXXXXXXX YYYYYYYY o XXXXXXXX YYYY).");
+  });
+  return out.join("+");
+}
+function applyCheats(){
+  if (!fn || !fn.cheatSet) return;
+  try {
+    fn.cheatReset();
+    loadCheats().forEach((c, i) => { if (c.on) fn.cheatSet(i, 1, c.code); });
+  } catch(e){ console.warn(e); }
+}
+async function backupBeforeCheats(){
+  // the first time a cheat goes on, keep a copy of the real save where the player can restore it
+  try {
+    await flushSave();
+    if (lastSaveBytes && !blank(lastSaveBytes)){ await histAdd(game.name, lastSaveBytes.slice().buffer); histNewest = Date.now(); }
+  } catch(e){}
+}
+function renderCheats(){
+  const box = $("cheatList"); box.textContent = "";
+  const list = loadCheats();
+  if (!list.length){ const p = document.createElement("p"); p.className = "note"; p.textContent = "No hay trucos guardados para este juego."; box.append(p); return; }
+  list.forEach((c, i) => {
+    const row = document.createElement("div"); row.className = "game";
+    const meta = document.createElement("div"); meta.className = "meta";
+    const nm = document.createElement("div"); nm.className = "name"; nm.textContent = c.name || ("Truco " + (i + 1));
+    const sub = document.createElement("div"); sub.className = "sub"; sub.textContent = c.code.split("+").join("  ");
+    meta.append(nm, sub);
+    const acts = document.createElement("div"); acts.className = "row"; acts.style.flexWrap = "nowrap";
+    const tog = document.createElement("button"); tog.className = "btn small"; tog.type = "button";
+    tog.textContent = c.on ? "Activo" : "Apagado"; tog.setAttribute("aria-pressed", c.on ? "true" : "false");
+    if (c.on){ tog.style.borderColor = "var(--accent)"; tog.style.color = "var(--accent)"; }
+    tog.onclick = async () => {
+      const l = loadCheats(); if (!l[i]) return;
+      if (!l[i].on) await backupBeforeCheats();
+      l[i].on = !l[i].on; saveCheats(l); applyCheats(); renderCheats();
+      $("cheatMsg").className = "msg ok"; $("cheatMsg").textContent = l[i].on ? "Truco activado. Si algo se ve raro, apágalo y restaura una versión anterior." : "Truco apagado.";
+    };
+    const del = document.createElement("button"); del.className = "btn small danger"; del.type = "button"; del.textContent = "Borrar";
+    del.onclick = () => armConfirm(del, "¿Seguro?", () => { const l = loadCheats(); l.splice(i, 1); saveCheats(l); applyCheats(); renderCheats(); });
+    acts.append(tog, del); row.append(meta, acts); box.append(row);
+  });
+}
+$("cheatAdd").onclick = () => {
+  const msg = $("cheatMsg");
+  try {
+    if (!running) throw new Error("Abre un juego primero.");
+    const code = parseCheat($("cheatCode").value);
+    const l = loadCheats(); l.push({name: $("cheatName").value.trim().slice(0, 40), code, on: false}); saveCheats(l);
+    $("cheatCode").value = ""; $("cheatName").value = "";
+    renderCheats(); msg.className = "msg ok"; msg.textContent = "Truco guardado (apagado). Tócalo para activarlo.";
+  } catch(e){ msg.className = "msg bad"; msg.textContent = e.message; }
+};
+$("menu").addEventListener("close", () => { $("cheatMsg").textContent = ""; });
 renderLibrary();
 if ("serviceWorker" in navigator){
   const hadController = !!navigator.serviceWorker.controller;
