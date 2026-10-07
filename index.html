@@ -43,9 +43,11 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #play{position:fixed;inset:0;background:#000;z-index:5;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overflow:hidden
   ;--u:min(1vw,1vh);--s:clamp(60px, 15*var(--u), 92px);--gap:max(10px, env(safe-area-inset-left, 0px));--top:max(8px, env(safe-area-inset-top, 0px));--bot:max(12px, env(safe-area-inset-bottom, 0px))}
 .screen{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw, 150vh);width:min(100vw, 150dvh);aspect-ratio:3/2;max-width:100%;background:#000;overflow:hidden}
-/* The engine sizes its drawing buffer itself, in device pixels (it reads devicePixelContentBoxSize), so the canvas
-   just fills the box: one buffer pixel per screen pixel. Enlarging the CSS box here would multiply by the DPR twice. */
-.screen canvas{position:absolute;left:0;top:0;width:100%!important;height:100%!important;image-rendering:pixelated;display:block}
+/* The engine sizes its own drawing buffer from a ResizeObserver, normally in device pixels (RetroArch passes
+   devicePixelContentBoxSize straight to the canvas). fitScale() checks the result once the game runs: if the
+   buffer came out smaller than one pixel per screen pixel (some emulated-DPR setups report CSS pixels), --rs
+   enlarges the CSS box and a transform shrinks it back, so the buffer lands at screen resolution either way. */
+.screen canvas{position:absolute;left:0;top:0;width:calc(100% * var(--rs, 1))!important;height:calc(100% * var(--rs, 1))!important;transform:scale(calc(1 / var(--rs, 1)));transform-origin:0 0;image-rendering:pixelated;display:block}
 .screen.smooth canvas{image-rendering:auto}
 .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;text-align:center;background:#000;color:var(--mute);font-size:14px;touch-action:auto}
 .overlay strong{color:var(--ink);font-weight:600}
@@ -364,6 +366,14 @@ function ago(ts){
 }
 const fmtSize = (n) => n >= 1048576 ? (n/1048576).toFixed(1) + " MB" : Math.round(n/1024) + " KB";
 const safeName = (n) => n.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9 _\-()]+/g, "_").trim().slice(0,80) || "juego";
+/* Identity of the game inside a ROM, from the cartridge header (title + game code + maker). ROM hacks and their
+   updates keep the base game's header, so a new version of the same hack matches; a different game does not. */
+function gameId(data, ext){
+  const at = ext === "gba" ? 0xA0 : 0x134, len = ext === "gba" ? 18 : 16;
+  if (data.length < at + len) return "";
+  let s = ""; for (let i = at; i < at + len; i++){ const b = data[i]; s += b >= 32 && b < 127 ? String.fromCharCode(b) : (b ? "?" : " "); }
+  return s.trim();
+}
 function armConfirm(btn, label, action){
   // two-tap confirm, since dialogs like confirm() don't show here
   if (btn.dataset.armed === "1"){ btn.dataset.armed = ""; btn.textContent = btn.dataset.orig; action(); return; }
@@ -406,23 +416,31 @@ async function loadRomFile(f){
     let name = f.name, data = new Uint8Array(await f.arrayBuffer());
     if (/\.zip$/i.test(name)){ const z = await unzip(data.buffer, ["gba","gbc","gb"]); name = z.name.split("/").pop(); data = z.data; }
     if (!/\.(gba|gbc|gb)$/i.test(name)) throw new Error("Ese archivo no parece una ROM (.gba, .gbc o .gb).");
-    const crc = crc32(data);
+    const ext = name.split(".").pop().toLowerCase(), crc = crc32(data), gid = gameId(data, ext);
+    let note = "";
     try {
-      // a different ROM with the same file name must not inherit the other one's save: give it its own name
       const prev = await idbGet("meta", name);
       const differs = prev && (prev.crc != null ? prev.crc !== crc : prev.size !== data.length);
-      if (differs) name = name.replace(/(\.[^.]+)$/, " (" + crc.toString(16).padStart(8, "0") + ")$1");
-      const old = differs ? null : prev;
+      let old = prev;
+      if (differs){
+        // same file name, different content: a new version of the same game keeps its entry and its save;
+        // a different game gets its own name, so it never inherits the other one's save
+        let prevGid = prev.gid;
+        if (prevGid == null){ try { const r = await idbGet("roms", name); if (r) prevGid = gameId(new Uint8Array(r), ext); } catch(e){} }
+        if (gid && prevGid === gid){ note = "Versión nueva del mismo juego: la partida se conserva"; }
+        else { name = name.replace(/(\.[^.]+)$/, " (" + crc.toString(16).padStart(8, "0") + ")$1"); old = null; note = "Ya tenías otro juego con ese nombre; este quedó como " + name; }
+      }
       await idbPut("roms", name, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
-      await idbPut("meta", name, {name, size:data.length, crc, added:(old && old.added) || Date.now(), played:Date.now()});
+      await idbPut("meta", name, {name, size:data.length, crc, gid, added:(old && old.added) || Date.now(), played:Date.now()});
     } catch(e){ /* storage full or blocked: still playable this session */ }
     msg.textContent = "";
     start(name, data);
+    if (note) toast(note, 5000);
   } catch(e){ msg.className = "msg bad"; msg.textContent = e.message || String(e); }
 }
 
 /* ---------- Emulator ---------- */
-let Module = null, FS = null, fn = null, running = false, game = null, savePath = null, lastSaveBytes = null, lastSaveTs = 0, timers = [], ff = false, histNewest = -1;
+let Module = null, FS = null, fn = null, running = false, game = null, savePath = null, lastSaveBytes = null, lastSaveTs = 0, timers = [], ff = false, histNewest = -1, loopOn = true;
 
 function same(a, b){ if (!a || !b || a.length !== b.length) return false; for (let i=0;i<a.length;i++) if (a[i] !== b[i]) return false; return true; }
 function blank(a){ for (let i=0;i<a.length;i++) if (a[i] !== 0xFF && a[i] !== 0) return false; return true; }
@@ -763,12 +781,13 @@ $("exportBtn").onclick = async () => {
 };
 
 /* ---------- pause on hide and while the menu is open, flush on leave ---------- */
-let loopOn = true;
 function syncLoop(){
   if (!running || !fn) return;
   const want = !document.hidden && !$("menu").open;
   if (want === loopOn) return;
   try { fn.loop(want ? 1 : 0); loopOn = want; } catch(e){}
+  // a fresh measuring window after a pause, so the speed reading and its calibration never see the frozen frames
+  fpsLast = {t: performance.now(), f: frameNow()}; lastTune = performance.now();
 }
 document.addEventListener("visibilitychange", () => {
   if (!running) return;
@@ -822,7 +841,8 @@ function pump(){
     sent[b] = v; changedAt[b] = f;
   }
   const now = performance.now();
-  if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; tuneFF(); }
+  if (!loopOn){ fpsLast = {t: now, f}; lastTune = now; return; }   // paused: no reading, no calibration
+  if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; tuneFF(); fitScale(); }
 }
 let turbo = false;
 try { turbo = localStorage.getItem("ra-turbo") === "1"; } catch(e){}
@@ -916,6 +936,17 @@ function applyShader(){
   } catch(e){ console.warn(e); }
 }
 function paintImg(){ $("imgBtn").textContent = IMG_MODES[imgMode].label; }
+let rs = 1;
+function fitScale(){
+  if (!running) return;
+  const c = $("canvas"), dpr = window.devicePixelRatio || 1;
+  if (!c.clientWidth || (c.width === 300 && c.height === 150)) return;   // the engine has not sized it yet
+  const k = c.width / c.clientWidth;             // buffer pixels the engine made per CSS pixel of its box (clientWidth ignores the transform)
+  const next = Math.min(4, Math.max(1, dpr / k)); // 1 when the engine already works in device pixels
+  if (Math.abs(next - rs) < 0.1 * rs) return;
+  rs = next; document.documentElement.style.setProperty("--rs", rs.toFixed(4));
+}
+window.addEventListener("resize", () => setTimeout(fitScale, 300));
 $("imgBtn").onclick = () => { imgMode = IMG_ORDER[(IMG_ORDER.indexOf(imgMode) + 1) % IMG_ORDER.length]; try { localStorage.setItem("ra-img2", imgMode); } catch(e){} paintImg(); applyShader(); };
 paintImg();
 
