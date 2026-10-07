@@ -230,7 +230,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 10 · motor mGBA</p>
+    <p class="note">Versión 11 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -859,6 +859,13 @@ window.addEventListener("pointermove", (e) => { if (!pointers.has(e.pointerId)) 
 const up = (e) => { if (pointers.delete(e.pointerId)) sync(); };
 window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
 padEl.addEventListener("contextmenu", (e) => e.preventDefault());
+// A touch on a game button must not start a browser gesture. Chrome holds back the fast-forward loop for about
+// 100 ms after every touch it might turn into a tap or scroll, which is the stutter when tapping A quickly.
+// Cancelling the touch here stops that; the controls themselves run on pointer events, which still arrive.
+// (Real buttons like ×4, TURBO and ☰ are left alone so their click still works.)
+["touchstart", "touchmove", "touchend", "touchcancel"].forEach((t) => padEl.addEventListener(t, (e) => {
+  if (e.cancelable && e.target.closest && e.target.closest("[data-btn]")) e.preventDefault();
+}, {passive: false}));
 
 /* ---------- input: keyboard ---------- */
 const KEYS = {ArrowUp:"UP",ArrowDown:"DOWN",ArrowLeft:"LEFT",ArrowRight:"RIGHT",KeyX:"A",KeyZ:"B",Enter:"START",ShiftLeft:"SELECT",ShiftRight:"SELECT",Backspace:"SELECT",KeyA:"L",KeyS:"R"};
