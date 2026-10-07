@@ -75,7 +75,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .fb.a{right:var(--gap);bottom:calc(var(--bot) + var(--f) * .55)}
 .fb.b{right:calc(var(--gap) + var(--f) * 1.15);bottom:var(--bot)}
 /* turbo switch sits just above A; while on, holding A taps it ~15 times per game second */
-.turbo{--f:clamp(58px, 15*var(--u), 92px);right:var(--gap);bottom:calc(var(--bot) + var(--f) * 1.55 + 10px);width:var(--f);height:calc(var(--f) * .36);border-radius:999px;font-size:calc(var(--f) * .15);font-weight:600;letter-spacing:.06em}
+.turbo{--f:clamp(58px, 15*var(--u), 92px);right:var(--gap);bottom:calc(var(--bot) + var(--f) * 1.55 + 22px);width:var(--f);height:calc(var(--f) * .36);border-radius:999px;font-size:calc(var(--f) * .15);font-weight:600;letter-spacing:.06em}
 .pill{bottom:calc(var(--bot) + 4px);width:clamp(50px, 11*var(--u), 72px);height:clamp(22px, 4.6*var(--u), 30px);border-radius:999px;font-size:9px;letter-spacing:.08em;color:rgba(255,255,255,.7)}
 .pill.sel{left:calc(50% - clamp(50px, 11*var(--u), 72px) - 10px)}
 .pill.start{left:calc(50% + 10px)}
@@ -89,7 +89,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .dpad{bottom:calc(var(--bot) + 56px)}
   .fb.a{bottom:calc(var(--bot) + 56px + var(--f) * .55)}
   .fb.b{bottom:calc(var(--bot) + 56px)}
-  .turbo{bottom:calc(var(--bot) + 56px + var(--f) * 1.55 + 10px)}
+  .turbo{bottom:calc(var(--bot) + 56px + var(--f) * 1.55 + 22px)}
 }
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
@@ -230,7 +230,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 11 · motor mGBA</p>
+    <p class="note">Versión 12 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -664,7 +664,7 @@ function tuneFF(){
   if (Math.abs(next - ffInternal) >= 0.2) sendRatio(next, true); else { settled[want] = true; tuned[want] = ffInternal; saveTuned(); }
 }
 paintFF();
-$("ffBtn").onclick = () => running && setFF(!ff);
+$("ffBtn").onclick = (e) => { if (ownClick(e)) running && setFF(!ff); };
 $("saveStateBtn").onclick = async () => {
   if (!running) return;
   try { const s = grabState(); await idbPut("states", game.name + "|1", {data: s.buffer, ts: Date.now()}); toast("Estado guardado " + hhmm(Date.now())); }
@@ -847,7 +847,7 @@ function pump(){
 let turbo = false;
 try { turbo = localStorage.getItem("ra-turbo") === "1"; } catch(e){}
 function paintTurbo(){ $("turboBtn").setAttribute("aria-pressed", turbo ? "true" : "false"); }
-$("turboBtn").addEventListener("click", () => { turbo = !turbo; try { localStorage.setItem("ra-turbo", turbo ? "1" : "0"); } catch(e){} paintTurbo(); toast(turbo ? "Turbo A: mantén A para pasar textos" : "Turbo A apagado"); });
+$("turboBtn").addEventListener("click", (e) => { if (!ownClick(e)) return; turbo = !turbo; try { localStorage.setItem("ra-turbo", turbo ? "1" : "0"); } catch(e){} paintTurbo(); toast(turbo ? "Turbo A: mantén A para pasar textos" : "Turbo A apagado"); });
 paintTurbo();
 const padEl = $("pad");
 padEl.addEventListener("pointerdown", (e) => {
@@ -859,6 +859,18 @@ window.addEventListener("pointermove", (e) => { if (!pointers.has(e.pointerId)) 
 const up = (e) => { if (pointers.delete(e.pointerId)) sync(); };
 window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
 padEl.addEventListener("contextmenu", (e) => e.preventDefault());
+/* iPhones (and to a lesser degree Android) move a tap to the nearest "clickable" element when the finger lands
+   near one. TURBO and ×4 are real buttons and the game buttons were not, so a tap on A could turn into a tap on
+   TURBO. Two guards: the game buttons count as clickable (empty click handler), and TURBO/×4 only react to a
+   click whose touch actually started on them. */
+padEl.querySelectorAll("[data-btn]").forEach((el) => el.addEventListener("click", () => {}));
+const pressStart = new WeakMap();
+["turboBtn", "ffBtn"].forEach((id) => $(id).addEventListener("pointerdown", (e) => pressStart.set($(id), e.timeStamp)));
+function ownClick(e){
+  if (!e.isTrusted || e.detail === 0) return true;               // keyboard or programmatic activation
+  const t = pressStart.get(e.currentTarget); pressStart.delete(e.currentTarget);
+  return t != null && e.timeStamp - t < 1500;
+}
 // A touch on a game button must not start a browser gesture. Chrome holds back the fast-forward loop for about
 // 100 ms after every touch it might turn into a tap or scroll, which is the stutter when tapping A quickly.
 // Cancelling the touch here stops that; the controls themselves run on pointer events, which still arrive.
