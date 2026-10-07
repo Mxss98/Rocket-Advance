@@ -43,9 +43,10 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #play{position:fixed;inset:0;background:#000;z-index:5;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overflow:hidden
   ;--u:min(1vw,1vh);--s:clamp(60px, 15*var(--u), 92px);--gap:max(10px, env(safe-area-inset-left, 0px));--top:max(8px, env(safe-area-inset-top, 0px));--bot:max(12px, env(safe-area-inset-bottom, 0px))}
 .screen{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw, 150vh);width:min(100vw, 150dvh);aspect-ratio:3/2;max-width:100%;background:#000;overflow:hidden}
-/* The engine sizes its drawing buffer from the canvas' CSS box, in CSS pixels. --rs enlarges that box and a
-   transform shrinks it back, so the page picks the buffer size: one pixel per screen pixel for "Píxeles",
-   or 1x/2x the GBA resolution, then smoothed by the browser, for "Suave"/"Media" (the look My Boy uses). */
+/* The engine sizes its own drawing buffer from a ResizeObserver, normally in device pixels (RetroArch passes
+   devicePixelContentBoxSize straight to the canvas). fitScale() checks the result once the game runs: if the
+   buffer came out smaller than one pixel per screen pixel (some emulated-DPR setups report CSS pixels), --rs
+   enlarges the CSS box and a transform shrinks it back, so the buffer lands at screen resolution either way. */
 .screen canvas{position:absolute;left:0;top:0;width:calc(100% * var(--rs, 1))!important;height:calc(100% * var(--rs, 1))!important;transform:scale(calc(1 / var(--rs, 1)));transform-origin:0 0;image-rendering:pixelated;display:block}
 .screen.smooth canvas{image-rendering:auto}
 .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;text-align:center;background:#000;color:var(--mute);font-size:14px;touch-action:auto}
@@ -162,7 +163,7 @@ body.playing header{display:none}
   <section id="play" hidden>
     <div class="screen" id="screen">
       <canvas id="canvas" tabindex="-1"></canvas>
-      <div class="overlay" id="overlay"><strong id="ovTitle">Cargando motor…</strong><span id="ovSub">mGBA</span></div>
+      <div class="overlay" id="overlay"><strong id="ovTitle">Cargando motor…</strong><span id="ovSub">mGBA</span><button class="btn small" id="ovBack" type="button" hidden>Volver a mis juegos</button></div>
       <div class="toast" id="toast" style="opacity:0"></div>
     </div>
     <div id="pad" aria-label="Controles">
@@ -229,7 +230,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 9 · motor mGBA</p>
+    <p class="note">Versión 10 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -267,11 +268,12 @@ async function tx(store, mode, fn){
   return new Promise((res, rej) => {
     const t = d.transaction(store, mode);
     const s = t.objectStore(store);
-    let out;
-    Promise.resolve(fn(s)).then(v => out = v);
-    t.oncomplete = () => res(out);
-    t.onerror = () => rej(t.error);
-    t.onabort = () => rej(t.error);
+    let out, failed = null, p;
+    try { p = Promise.resolve(fn(s)); } catch(e){ rej(e); return; }
+    p.then(v => { out = v; }, e => { failed = e || new Error("IndexedDB"); try { t.abort(); } catch(_){} });
+    t.oncomplete = () => failed ? rej(failed) : res(out);
+    t.onerror = () => rej(failed || t.error);
+    t.onabort = () => rej(failed || t.error);
   });
 }
 const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -321,7 +323,9 @@ async function unzip(buf, wantExt){
   let p = dv.getUint32(e+16,true); const count = dv.getUint16(e+10,true);
   const found = [];
   for (let k=0;k<count;k++){
-    const method = dv.getUint16(p+10,true), csize = dv.getUint32(p+20,true);
+    // central directory entry: all fields read before p moves on
+    const flags = dv.getUint16(p+8,true), method = dv.getUint16(p+10,true);
+    const csize = dv.getUint32(p+20,true), size = dv.getUint32(p+24,true);
     const nlen = dv.getUint16(p+28,true), xlen = dv.getUint16(p+30,true), clen = dv.getUint16(p+32,true);
     const off = dv.getUint32(p+42,true);
     const name = new TextDecoder().decode(u8.subarray(p+46, p+46+nlen));
@@ -329,10 +333,11 @@ async function unzip(buf, wantExt){
     const ext = name.split(".").pop().toLowerCase();
     const base = name.split("/").pop();
     if (!wantExt.includes(ext) || name.startsWith("__MACOSX") || base.startsWith("._")) continue;
-    found.push({name, method, csize, off, size: dv.getUint32(p - (46 + nlen + xlen + clen) + 24, true)});
+    found.push({name, method, csize, off, size, encrypted: (flags & 1) === 1});
   }
   found.sort((a,b) => b.size - a.size);
-  for (const {name, method, csize, off} of found){
+  for (const {name, method, csize, off, encrypted} of found){
+    if (encrypted) throw new Error("El .zip tiene contraseña. Descomprímelo primero.");
     const ds = off + 30 + dv.getUint16(off+26,true) + dv.getUint16(off+28,true);
     const raw = u8.subarray(ds, ds + csize);
     if (method === 0) return {name, data: raw.slice()};
@@ -361,6 +366,14 @@ function ago(ts){
 }
 const fmtSize = (n) => n >= 1048576 ? (n/1048576).toFixed(1) + " MB" : Math.round(n/1024) + " KB";
 const safeName = (n) => n.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9 _\-()]+/g, "_").trim().slice(0,80) || "juego";
+/* Identity of the game inside a ROM, from the cartridge header (title + game code + maker). ROM hacks and their
+   updates keep the base game's header, so a new version of the same hack matches; a different game does not. */
+function gameId(data, ext){
+  const at = ext === "gba" ? 0xA0 : 0x134, len = ext === "gba" ? 18 : 16;
+  if (data.length < at + len) return "";
+  let s = ""; for (let i = at; i < at + len; i++){ const b = data[i]; s += b >= 32 && b < 127 ? String.fromCharCode(b) : (b ? "?" : " "); }
+  return s.trim();
+}
 function armConfirm(btn, label, action){
   // two-tap confirm, since dialogs like confirm() don't show here
   if (btn.dataset.armed === "1"){ btn.dataset.armed = ""; btn.textContent = btn.dataset.orig; action(); return; }
@@ -403,17 +416,31 @@ async function loadRomFile(f){
     let name = f.name, data = new Uint8Array(await f.arrayBuffer());
     if (/\.zip$/i.test(name)){ const z = await unzip(data.buffer, ["gba","gbc","gb"]); name = z.name.split("/").pop(); data = z.data; }
     if (!/\.(gba|gbc|gb)$/i.test(name)) throw new Error("Ese archivo no parece una ROM (.gba, .gbc o .gb).");
+    const ext = name.split(".").pop().toLowerCase(), crc = crc32(data), gid = gameId(data, ext);
+    let note = "";
     try {
+      const prev = await idbGet("meta", name);
+      const differs = prev && (prev.crc != null ? prev.crc !== crc : prev.size !== data.length);
+      let old = prev;
+      if (differs){
+        // same file name, different content: a new version of the same game keeps its entry and its save;
+        // a different game gets its own name, so it never inherits the other one's save
+        let prevGid = prev.gid;
+        if (prevGid == null){ try { const r = await idbGet("roms", name); if (r) prevGid = gameId(new Uint8Array(r), ext); } catch(e){} }
+        if (gid && prevGid === gid){ note = "Versión nueva del mismo juego: la partida se conserva"; }
+        else { name = name.replace(/(\.[^.]+)$/, " (" + crc.toString(16).padStart(8, "0") + ")$1"); old = null; note = "Ya tenías otro juego con ese nombre; este quedó como " + name; }
+      }
       await idbPut("roms", name, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
-      await idbPut("meta", name, {name, size:data.length, added:Date.now(), played:Date.now()});
+      await idbPut("meta", name, {name, size:data.length, crc, gid, added:(old && old.added) || Date.now(), played:Date.now()});
     } catch(e){ /* storage full or blocked: still playable this session */ }
     msg.textContent = "";
     start(name, data);
+    if (note) toast(note, 5000);
   } catch(e){ msg.className = "msg bad"; msg.textContent = e.message || String(e); }
 }
 
 /* ---------- Emulator ---------- */
-let Module = null, FS = null, fn = null, running = false, game = null, savePath = null, lastSaveBytes = null, lastSaveTs = 0, timers = [], ff = false, pausedByHide = false;
+let Module = null, FS = null, fn = null, running = false, game = null, savePath = null, lastSaveBytes = null, lastSaveTs = 0, timers = [], ff = false, histNewest = -1, loopOn = true;
 
 function same(a, b){ if (!a || !b || a.length !== b.length) return false; for (let i=0;i<a.length;i++) if (a[i] !== b[i]) return false; return true; }
 function blank(a){ for (let i=0;i<a.length;i++) if (a[i] !== 0xFF && a[i] !== 0) return false; return true; }
@@ -431,7 +458,7 @@ const RA_CFG = [
 async function start(name, romBytes){
   $("lib").hidden = true; $("play").hidden = false; document.body.classList.add("playing");
   $("gameName").textContent = name.replace(/\.[^.]+$/, "");
-  $("ovTitle").textContent = "Cargando motor…"; $("ovSub").textContent = "mGBA"; $("overlay").hidden = false;
+  $("ovTitle").textContent = "Cargando motor…"; $("ovSub").textContent = "mGBA"; $("overlay").hidden = false; $("ovBack").hidden = true;
   setLed("busy", "Cargando");
   game = {name, base: safeName(name), ext: (name.split(".").pop() || "gba").toLowerCase()};
   try { const m = await idbGet("meta", name); if (m){ m.played = Date.now(); await idbPut("meta", name, m); } } catch(e){}
@@ -475,7 +502,7 @@ async function start(name, romBytes){
     Module.callMain([romPath]);
     Module.resumeMainLoop && Module.resumeMainLoop();
   } catch(e){ fatal("El juego no arrancó.", String(e && e.message || e)); return; }
-  running = true;
+  running = true; loopOn = true; histNewest = -1;
   try { fn.keyboard(0); } catch(e){}
   try { fn.ffRatio(ffRate || 0); } catch(e){}
   applyShader();
@@ -490,13 +517,18 @@ async function start(name, romBytes){
   timers.push(setInterval(flushSave, FLUSH_MS));
   timers.push(setInterval(autoState, AUTOSTATE_MS));
   timers.push(setInterval(updateStatus, 15000));
+  fpsLast = {t: performance.now(), f: frameNow()};
+  timers.push(setInterval(pump, 8));
+  requestAnimationFrame(rafTick);
   // offer to resume from the automatic snapshot
   try {
     const st = await idbGet("states", name + "|auto");
     if (st) offerResume(st);
   } catch(e){}
 }
-function fatal(title, sub){ $("ovTitle").textContent = title; $("ovSub").textContent = sub || ""; $("overlay").hidden = false; setLed("bad", "Error"); }
+function fatal(title, sub){ $("ovTitle").textContent = title; $("ovSub").textContent = sub || ""; $("overlay").hidden = false; $("ovBack").hidden = false; setLed("bad", "Error"); }
+// the wasm runtime can't be torn down once created, so going back means a fresh page
+$("ovBack").onclick = () => location.reload();
 
 function updateStatus(){
   if (!running) return;
@@ -513,21 +545,23 @@ async function flushSave(){
     const isSame = same(d, lastSaveBytes);
     backupMs = Math.max(backupMs * 0.9, performance.now() - t0);
     if (isSame) return;
-    if (blank(d) && lastSaveBytes && !blank(lastSaveBytes)){
-      // never let an empty save overwrite a real one silently
-      await histAdd(game.name, lastSaveBytes.slice().buffer);
+    const erased = blank(d) && lastSaveBytes && !blank(lastSaveBytes);
+    if (erased){
+      // the game wiped its save (or wrote garbage): the blank one becomes current, as the game intends,
+      // but the real one goes to history first and the player is told where to find it
+      await histAdd(game.name, lastSaveBytes.slice().buffer); histNewest = Date.now();
     }
     const copy = d.slice();
     await idbPut("saves", game.name, {data: copy.buffer, ts: Date.now()});
     // keep an older version every few minutes
     if (!blank(copy)){
-      const hist = await histList(game.name);
-      const newest = hist.reduce((m, x) => Math.max(m, x.ts), 0);
-      if (Date.now() - newest > HISTORY_GAP_MS) await histAdd(game.name, copy.slice().buffer);
+      if (histNewest < 0){ const hist = await histList(game.name); histNewest = hist.reduce((m, x) => Math.max(m, x.ts), 0); }
+      if (Date.now() - histNewest > HISTORY_GAP_MS){ await histAdd(game.name, copy.slice().buffer); histNewest = Date.now(); }
     }
     lastSaveBytes = copy; lastSaveTs = Date.now();
     updateStatus();
-    if (!blank(copy)) toast("Partida respaldada");
+    if (erased) toast("El juego borró su partida. La anterior quedó en ☰ → Versiones anteriores", 5000);
+    else if (!blank(copy)) toast("Partida respaldada");
   } catch(e){ setLed("bad", "No se pudo respaldar"); console.error(e); }
 }
 function grabState(){
@@ -569,7 +603,9 @@ try { const v = parseInt(localStorage.getItem("ra-ff")); if (FF_RATES.includes(v
 /* The engine's own speed limiter overshoots or undershoots on some phones (asking x3 can give x2.1).
    So the page measures the real speed once fast mode has settled and nudges the value it hands the engine
    until the real speed matches what was asked. "tuned" remembers the right value per speed. */
-const tuned = {};
+let tuned = {};
+try { const t = JSON.parse(localStorage.getItem("ra-tuned") || "{}"); if (t && typeof t === "object") tuned = t; } catch(e){}
+function saveTuned(){ try { localStorage.setItem("ra-tuned", JSON.stringify(tuned)); } catch(e){} }
 let ffInternal = ffRate, lastTune = 0, lastMeas = 0, cpuLimited = false;
 function sendRatio(v, restart){
   ffInternal = v;
@@ -611,21 +647,21 @@ function tuneFF(){
   const list = (tries[want] = tries[want] || []);
   const prev = list[list.length - 1];
   list.push({v: ffInternal, m: meas, dir});
-  if (dir === 0){ settled[want] = true; tuned[want] = ffInternal; return; }
+  if (dir === 0){ settled[want] = true; tuned[want] = ffInternal; saveTuned(); return; }
   if (dir === 1 && prev && prev.dir === 1 && ffInternal > prev.v && meas <= prev.m * 1.03){
     // asking for more didn't make it faster: the phone is at its limit
-    cpuLimited = true; settled[want] = true; tuned[want] = want; sendRatio(want, true); return;
+    cpuLimited = true; settled[want] = true; tuned[want] = want; saveTuned(); sendRatio(want, true); return;
   }
   if ((prev && prev.dir === -dir) || list.length >= 6){
     // the engine only has coarse speed steps here: keep the closest one we have seen and stop adjusting
     const best = list.slice().sort((a, b) => Math.abs(a.m - want) - Math.abs(b.m - want) || b.m - a.m)[0];
-    settled[want] = true; tuned[want] = best.v;
+    settled[want] = true; tuned[want] = best.v; saveTuned();
     if (Math.abs(best.v - ffInternal) > 0.01) sendRatio(best.v, true);
     return;
   }
   const next = dir === 1 ? Math.min(want * 2.5, ffInternal * want / Math.max(meas, 0.5))
                          : Math.max(want * 0.5, ffInternal * want / meas);
-  if (Math.abs(next - ffInternal) >= 0.2) sendRatio(next, true); else settled[want] = true;
+  if (Math.abs(next - ffInternal) >= 0.2) sendRatio(next, true); else { settled[want] = true; tuned[want] = ffInternal; saveTuned(); }
 }
 paintFF();
 $("ffBtn").onclick = () => running && setFF(!ff);
@@ -647,11 +683,11 @@ $("loadStateBtn").onclick = async () => {
 let muted = false;
 try { muted = localStorage.getItem("ra-muted") === "1"; } catch(e){}
 function applyVolume(){
-  try { const ctx = Module && Module.AL && Module.AL.currentCtx; if (ctx && ctx.sources) ctx.sources.forEach(src => { if (src && src.gain) src.gain.gain.value = muted ? 0 : 1; }); } catch(e){}
+  // every source feeds the context's master gain node, so one value mutes everything
+  try { const ctx = Module && Module.AL && Module.AL.currentCtx; if (ctx && ctx.gain) ctx.gain.gain.value = muted ? 0 : 1; } catch(e){}
 }
 function paintSound(){ $("soundBtn").textContent = muted ? "Sonido: no" : "Sonido: sí"; $("soundBtn").setAttribute("aria-pressed", muted ? "false" : "true"); }
 $("soundBtn").onclick = () => { muted = !muted; try { localStorage.setItem("ra-muted", muted ? "1" : "0"); } catch(e){} applyVolume(); paintSound(); };
-setInterval(() => { if (running && muted) applyVolume(); }, 700);
 paintSound();
 
 /* fullscreen */
@@ -670,7 +706,7 @@ $("fsBtn").onclick = async () => {
 document.addEventListener("fullscreenchange", paintFs);
 $("menuBtn").onclick = async () => {
   if (!running) return;
-  $("menu").showModal(); $("menuMsg").textContent = ""; paintFs();
+  $("menu").showModal(); $("menuMsg").textContent = ""; paintFs(); syncLoop();
   $("fpsNote").textContent = ff
     ? (ffRate
         ? "Velocidad real: ×" + (fps / 60).toFixed(1) + " de ×" + ffRate + " pedido" + (cpuLimited || (settled[ffRate] && fps / 60 < ffRate * 0.85) ? " · es lo máximo de esta app en tu celular" : (!settled[ffRate] && fps / 60 < ffRate * 0.93 ? " · ajustando…" : ""))
@@ -709,7 +745,7 @@ async function renderHistory(){
 async function replaceSave(bytes, label){
   try {
     await flushSave();
-    if (lastSaveBytes && !blank(lastSaveBytes)) await histAdd(game.name, lastSaveBytes.slice().buffer);
+    if (lastSaveBytes && !blank(lastSaveBytes)){ await histAdd(game.name, lastSaveBytes.slice().buffer); histNewest = Date.now(); }
     writeFile(savePath, bytes);
     fn.reloadSave(); fn.restart();
     lastSaveBytes = bytes.slice();
@@ -744,12 +780,21 @@ $("exportBtn").onclick = async () => {
   msg.className = "msg ok"; msg.textContent = "Descargado " + fname + ". Para My Boy o Pizza Boy, renómbralo igual que la ROM (" + game.base + ".sav).";
 };
 
-/* ---------- pause on hide, flush on leave ---------- */
+/* ---------- pause on hide and while the menu is open, flush on leave ---------- */
+function syncLoop(){
+  if (!running || !fn) return;
+  const want = !document.hidden && !$("menu").open;
+  if (want === loopOn) return;
+  try { fn.loop(want ? 1 : 0); loopOn = want; } catch(e){}
+  // a fresh measuring window after a pause, so the speed reading and its calibration never see the frozen frames
+  fpsLast = {t: performance.now(), f: frameNow()}; lastTune = performance.now();
+}
 document.addEventListener("visibilitychange", () => {
   if (!running) return;
-  if (document.hidden){ flushSave(); autoState(); try { fn.loop(0); pausedByHide = true; } catch(e){} }
-  else if (pausedByHide){ try { fn.loop(1); } catch(e){} pausedByHide = false; }
+  if (document.hidden){ flushSave(); autoState(); }
+  syncLoop();
 });
+$("menu").addEventListener("close", syncLoop);
 window.addEventListener("pagehide", () => { if (running) flushSave(); });
 
 /* ---------- input: touch ---------- */
@@ -778,7 +823,7 @@ const inq = {}, sent = {}, changedAt = {};
 function send(b, v){ (inq[b] = inq[b] || []).push(v); }
 function frameNow(){ try { return fn.frames(); } catch(e){ return 0; } }
 let fpsLast = {t: performance.now(), f: 0}, fps = 0;
-setInterval(() => {
+function pump(){
   if (!running || !fn) return;
   const f = frameNow();
   if (turbo && pressed.has("A") && !(inq.A && inq.A.length) && f - (changedAt.A || 0) >= 2){
@@ -796,8 +841,9 @@ setInterval(() => {
     sent[b] = v; changedAt[b] = f;
   }
   const now = performance.now();
-  if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; tuneFF(); }
-}, 8);
+  if (!loopOn){ fpsLast = {t: now, f}; lastTune = now; return; }   // paused: no reading, no calibration
+  if (now - fpsLast.t >= 1000){ fps = Math.round((f - fpsLast.f) * 1000 / (now - fpsLast.t)); fpsLast = {t: now, f}; tuneFF(); fitScale(); }
+}
 let turbo = false;
 try { turbo = localStorage.getItem("ra-turbo") === "1"; } catch(e){}
 function paintTurbo(){ $("turboBtn").setAttribute("aria-pressed", turbo ? "true" : "false"); }
@@ -828,6 +874,7 @@ window.addEventListener("blur", () => { keysDown.clear(); pointers.clear(); sync
 
 function unlockAudio(){
   try { const c = Module && Module.AL && Module.AL.currentCtx && Module.AL.currentCtx.audioCtx; if (c && c.state !== "running") c.resume(); } catch(e){}
+  if (muted) applyVolume(); // the audio context may not have existed yet when the game started
 }
 document.addEventListener("pointerdown", unlockAudio, {passive:true});
 
@@ -888,22 +935,28 @@ function applyShader(){
     fn.shader(1);
   } catch(e){ console.warn(e); }
 }
-function applyScale(){
-  // one drawing-buffer pixel per screen pixel; the shader does any smoothing
-  document.documentElement.style.setProperty("--rs", String(window.devicePixelRatio || 1));
-  $("imgBtn").textContent = IMG_MODES[imgMode].label;
+function paintImg(){ $("imgBtn").textContent = IMG_MODES[imgMode].label; }
+let rs = 1;
+function fitScale(){
+  if (!running) return;
+  const c = $("canvas"), dpr = window.devicePixelRatio || 1;
+  if (!c.clientWidth || (c.width === 300 && c.height === 150)) return;   // the engine has not sized it yet
+  const k = c.width / c.clientWidth;             // buffer pixels the engine made per CSS pixel of its box (clientWidth ignores the transform)
+  const next = Math.min(4, Math.max(1, dpr / k)); // 1 when the engine already works in device pixels
+  if (Math.abs(next - rs) < 0.1 * rs) return;
+  rs = next; document.documentElement.style.setProperty("--rs", rs.toFixed(4));
 }
-$("imgBtn").onclick = () => { imgMode = IMG_ORDER[(IMG_ORDER.indexOf(imgMode) + 1) % IMG_ORDER.length]; try { localStorage.setItem("ra-img2", imgMode); } catch(e){} applyScale(); applyShader(); };
-applyScale();
-window.addEventListener("resize", applyScale);
+window.addEventListener("resize", () => setTimeout(fitScale, 300));
+$("imgBtn").onclick = () => { imgMode = IMG_ORDER[(IMG_ORDER.indexOf(imgMode) + 1) % IMG_ORDER.length]; try { localStorage.setItem("ra-img2", imgMode); } catch(e){} paintImg(); applyShader(); };
+paintImg();
 
 /* stutter diagnostics: screen refreshes that took longer than 50 ms, and how long backups block the game */
 const janks = []; let lastRaf = 0, backupMs = 0;
 function rafTick(t){
-  if (running && lastRaf && !document.hidden && !$("menu").open && t - lastRaf > 50){ janks.push(t); if (janks.length > 500) janks.shift(); }
+  if (!running) return;
+  if (lastRaf && !document.hidden && !$("menu").open && t - lastRaf > 50){ janks.push(t); if (janks.length > 500) janks.shift(); }
   lastRaf = t; requestAnimationFrame(rafTick);
 }
-requestAnimationFrame(rafTick);
 const jankCount = () => { const now = performance.now(); return janks.filter((x) => now - x < 60000).length; };
 renderLibrary();
 if ("serviceWorker" in navigator){
