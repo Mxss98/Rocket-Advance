@@ -128,6 +128,8 @@ textarea.field::placeholder{text-transform:none;font-family:var(--f-body)}
 .cheats{display:flex;flex-direction:column}
 .cheats .game{padding:8px 0}
 .cheats .sub{font-family:ui-monospace,"Courier New",monospace;font-size:12px;word-break:break-all}
+/* computer with mouse and keyboard: the Game Boy buttons can be hidden (☰ and the speed buttons stay) */
+body.nopad #pad [data-btn], body.nopad #turboBtn{display:none}
 .hist{display:flex;flex-direction:column;gap:0;max-height:220px;overflow:auto}
 .hist .game{padding:8px 0}
 .note{font-size:13px;color:var(--mute);line-height:1.45;margin:0}
@@ -215,6 +217,7 @@ body.playing header{display:none}
       <div class="row">
         <button class="btn small" id="soundBtn" aria-pressed="true">Sonido: sí</button>
         <button class="btn small" id="imgBtn">Imagen: suave</button>
+        <button class="btn small" id="padBtn">Botones: automático</button>
         <button class="btn small" id="fsBtn">Pantalla completa</button>
       </div>
     </div>
@@ -243,13 +246,13 @@ body.playing header{display:none}
     </div>
     <div class="grp">
       <span class="lbl">TECLADO</span>
-      <p class="keys"><kbd>Flechas</kbd> cruceta · <kbd>X</kbd> A · <kbd>Z</kbd> B · <kbd>Enter</kbd> Start · <kbd>Shift</kbd> Select · <kbd>A</kbd> L · <kbd>S</kbd> R · <kbd>Espacio</kbd> rápido</p>
+      <p class="keys"><kbd>Flechas</kbd> cruceta · <kbd>Z</kbd> A · <kbd>X</kbd> B · <kbd>Enter</kbd> Start · <kbd>Shift</kbd> Select · <kbd>A</kbd> L · <kbd>S</kbd> R · <kbd>Espacio</kbd> rápido · <kbd>C</kbd> turbo · <kbd>Esc</kbd> menú</p>
     </div>
     <div class="row">
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 14 · motor mGBA</p>
+    <p class="note">Versión 15 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -907,11 +910,13 @@ function ownClick(e){
 }, {passive: false}));
 
 /* ---------- input: keyboard ---------- */
-const KEYS = {ArrowUp:"UP",ArrowDown:"DOWN",ArrowLeft:"LEFT",ArrowRight:"RIGHT",KeyX:"A",KeyZ:"B",Enter:"START",ShiftLeft:"SELECT",ShiftRight:"SELECT",Backspace:"SELECT",KeyA:"L",KeyS:"R"};
+const KEYS = {ArrowUp:"UP",ArrowDown:"DOWN",ArrowLeft:"LEFT",ArrowRight:"RIGHT",KeyZ:"A",KeyX:"B",Enter:"START",ShiftLeft:"SELECT",ShiftRight:"SELECT",Backspace:"SELECT",KeyA:"L",KeyS:"R"};
 const keysDown = new Set();
 window.addEventListener("keydown", (e) => {
   if (!running || $("menu").open) return;
   if (e.code === "Space"){ e.preventDefault(); if (!e.repeat) setFF(!ff); return; }
+  if (e.code === "KeyC"){ e.preventDefault(); if (!e.repeat) $("turboBtn").click(); return; }
+  if (e.code === "Escape"){ e.preventDefault(); if (!e.repeat) $("menuBtn").click(); return; }
   const b = KEYS[e.code]; if (!b) return;
   e.preventDefault(); unlockAudio(); keysDown.add(b); sync();
 });
@@ -1069,6 +1074,22 @@ $("cheatAdd").onclick = () => {
   } catch(e){ msg.className = "msg bad"; msg.textContent = e.message; }
 };
 $("menu").addEventListener("close", () => { $("cheatMsg").textContent = ""; });
+/* on-screen Game Boy buttons: automatic (hidden on a computer without a touch screen), always, or hidden */
+const PAD_MODES = {auto: "Botones: automático", show: "Botones: siempre", hide: "Botones: ocultos"};
+const PAD_ORDER = ["auto", "show", "hide"];
+let padMode = "auto";
+try { const v = localStorage.getItem("ra-pad"); if (PAD_MODES[v]) padMode = v; } catch(e){}
+function isComputer(){
+  try { return matchMedia("(hover: hover) and (pointer: fine)").matches && !(navigator.maxTouchPoints > 0); } catch(e){ return false; }
+}
+function applyPad(){
+  const hide = padMode === "hide" || (padMode === "auto" && isComputer());
+  document.body.classList.toggle("nopad", hide);
+  $("padBtn").textContent = PAD_MODES[padMode];
+}
+$("padBtn").onclick = () => { padMode = PAD_ORDER[(PAD_ORDER.indexOf(padMode) + 1) % PAD_ORDER.length]; try { localStorage.setItem("ra-pad", padMode); } catch(e){} applyPad(); };
+try { matchMedia("(pointer: fine)").addEventListener("change", applyPad); } catch(e){}
+applyPad();
 renderLibrary();
 if ("serviceWorker" in navigator){
   const hadController = !!navigator.serviceWorker.controller;
