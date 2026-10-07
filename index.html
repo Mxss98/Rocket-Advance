@@ -62,6 +62,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .sh.l{left:var(--gap);border-radius:12px 34px 34px 12px / 12px 26px 26px 12px}
 .sh.r{right:var(--gap);border-radius:34px 12px 12px 34px / 26px 12px 12px 26px}
 .ffb{top:calc(var(--top) + var(--s) * .04);right:calc(var(--gap) + var(--s) * 1.15 + 10px);width:calc(var(--s) * .7);height:calc(var(--s) * .42);border-radius:10px;font-size:calc(var(--s) * .2);font-weight:600}
+/* the other speed, one tap away: tapping it swaps the two */
+.ffalt{top:calc(var(--top) + var(--s) * .04);right:calc(var(--gap) + var(--s) * 1.15 + 10px + var(--s) * .7 + 8px);width:calc(var(--s) * .7);height:calc(var(--s) * .42);border-radius:10px;font-size:calc(var(--s) * .2);font-weight:600;color:rgba(255,255,255,.6);border-color:rgba(255,255,255,.4)}
 .menu{top:var(--top);left:50%;transform:translateX(-50%);width:52px;height:42px;border-radius:8px}
 .menu svg{width:26px;height:20px}
 .menu .led{position:absolute;right:-5px;top:-5px}
@@ -84,7 +86,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .dpad{--d:clamp(160px, 53vw, 250px)}
   .screen{top:var(--top);transform:translateX(-50%);width:100vw}
   .sh,.menu{top:calc(var(--top) + 66.667vw + 14px)}
-  .ffb{top:calc(var(--top) + 66.667vw + 14px + var(--s) * .04)}
+  .ffb,.ffalt{top:calc(var(--top) + 66.667vw + 14px + var(--s) * .04)}
   #play{--u:1.15vw}
   .dpad{bottom:calc(var(--bot) + 56px)}
   .fb.a{bottom:calc(var(--bot) + 56px + var(--f) * .55)}
@@ -168,6 +170,7 @@ body.playing header{display:none}
     </div>
     <div id="pad" aria-label="Controles">
       <div class="ctl sh l" data-btn="L">L</div>
+      <button class="ctl ffalt" id="ffAltBtn" type="button" aria-label="Cambiar a la otra velocidad rápida">×6</button>
       <button class="ctl ffb" id="ffBtn" type="button" aria-pressed="false" aria-label="Velocidad rápida">×4</button>
       <button class="ctl menu" id="menuBtn" type="button" aria-label="Menú"><svg viewBox="0 0 26 20" aria-hidden="true"><path d="M2 3h22M2 10h22M2 17h22" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg><i class="led" id="led"></i></button>
       <div class="ctl sh r" data-btn="R">R</div>
@@ -230,7 +233,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 12 · motor mGBA</p>
+    <p class="note">Versión 13 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -598,8 +601,10 @@ function offerResume(st){
 /* ---------- menu actions ---------- */
 const FF_RATES = [2, 3, 4, 6, 8, 0];          // 0 = no limit ("Máx")
 const rateLabel = (r) => r ? "×" + r : "Máx";
-let ffRate = 4;
+let ffRate = 4, ffAlt = 6;
 try { const v = parseInt(localStorage.getItem("ra-ff")); if (FF_RATES.includes(v)) ffRate = v; } catch(e){}
+try { const v = parseInt(localStorage.getItem("ra-ff-alt")); if (FF_RATES.includes(v)) ffAlt = v; } catch(e){}
+if (ffAlt === ffRate) ffAlt = FF_RATES.find(r => r !== ffRate);
 /* The engine's own speed limiter overshoots or undershoots on some phones (asking x3 can give x2.1).
    So the page measures the real speed once fast mode has settled and nudges the value it hands the engine
    until the real speed matches what was asked. "tuned" remembers the right value per speed. */
@@ -616,6 +621,7 @@ function sendRatio(v, restart){
 }
 function paintFF(){
   $("ffBtn").textContent = rateLabel(ffRate);
+  $("ffAltBtn").textContent = rateLabel(ffAlt);
   const box = $("ffOpts"); box.textContent = "";
   FF_RATES.forEach(r => {
     const b = document.createElement("button"); b.className = "btn small"; b.type = "button";
@@ -626,6 +632,7 @@ function paintFF(){
   });
 }
 function setRate(r){
+  if (r !== ffRate){ ffAlt = ffRate; try { localStorage.setItem("ra-ff-alt", String(ffAlt)); } catch(e){} }
   ffRate = r; try { localStorage.setItem("ra-ff", String(r)); } catch(e){}
   cpuLimited = false; lastMeas = 0; settled[r] = false; tries[r] = [];
   sendRatio(tuned[r] || r, ff);
@@ -665,6 +672,7 @@ function tuneFF(){
 }
 paintFF();
 $("ffBtn").onclick = (e) => { if (ownClick(e)) running && setFF(!ff); };
+$("ffAltBtn").onclick = (e) => { if (!ownClick(e) || !running) return; setRate(ffAlt); toast("Velocidad rápida: " + rateLabel(ffRate)); };
 $("saveStateBtn").onclick = async () => {
   if (!running) return;
   try { const s = grabState(); await idbPut("states", game.name + "|1", {data: s.buffer, ts: Date.now()}); toast("Estado guardado " + hhmm(Date.now())); }
@@ -865,7 +873,7 @@ padEl.addEventListener("contextmenu", (e) => e.preventDefault());
    click whose touch actually started on them. */
 padEl.querySelectorAll("[data-btn]").forEach((el) => el.addEventListener("click", () => {}));
 const pressStart = new WeakMap();
-["turboBtn", "ffBtn"].forEach((id) => $(id).addEventListener("pointerdown", (e) => pressStart.set($(id), e.timeStamp)));
+["turboBtn", "ffBtn", "ffAltBtn"].forEach((id) => $(id).addEventListener("pointerdown", (e) => pressStart.set($(id), e.timeStamp)));
 function ownClick(e){
   if (!e.isTrusted || e.detail === 0) return true;               // keyboard or programmatic activation
   const t = pressStart.get(e.currentTarget); pressStart.delete(e.currentTarget);
