@@ -252,7 +252,7 @@ body.playing header{display:none}
       <button class="btn small" id="restartBtn">Reiniciar juego</button>
       <button class="btn small danger" id="quitBtn">Cambiar de juego</button>
     </div>
-    <p class="note">Versión 15 · motor mGBA</p>
+    <p class="note">Versión 16 · motor mGBA</p>
   </div>
 </dialog>
 
@@ -449,7 +449,12 @@ async function loadRomFile(f){
         // a different game gets its own name, so it never inherits the other one's save
         let prevGid = prev.gid;
         if (prevGid == null){ try { const r = await idbGet("roms", name); if (r) prevGid = gameId(new Uint8Array(r), ext); } catch(e){} }
-        if (gid && prevGid === gid){ note = "Versión nueva del mismo juego: la partida se conserva"; }
+        if (gid && prevGid === gid){
+          // the in-game save carries over, but snapshots of the old version would run old memory on the new
+          // code (glitches or a crash), so the automatic and manual states of the previous version are dropped
+          note = "Versión nueva del mismo juego: la partida se conserva. Los estados rápidos de la versión anterior se descartaron";
+          try { await idbDel("states", name + "|auto"); await idbDel("states", name + "|1"); } catch(e){}
+        }
         else { name = name.replace(/(\.[^.]+)$/, " (" + crc.toString(16).padStart(8, "0") + ")$1"); old = null; note = "Ya tenías otro juego con ese nombre; este quedó como " + name; }
       }
       await idbPut("roms", name, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
