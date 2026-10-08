@@ -1,6 +1,6 @@
 // Rocket Advance — offline support.
 // Change VERSION whenever any app file changes, so phones pick up the update.
-const VERSION = "ra-v16";
+const VERSION = "ra-v17";
 const APP = ["./", "index.html", "manifest.webmanifest", "mgba_libretro.js", "mgba_libretro.wasm",
              "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"];
 
